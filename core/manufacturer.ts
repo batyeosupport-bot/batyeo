@@ -1,0 +1,95 @@
+import {z} from 'zod';
+import type {Data,Station} from './types';
+import type {BatteryStationProvider} from './providers';
+import {DomainError} from './providers';
+
+export const MANUFACTURER_DEFAULT_BASE_URL='https://developer.chargenow.top/cdb-open-api/v1';
+export const MANUFACTURER_DEVICE_INFO_PATH='/rent/cabinet/query';
+export const MANUFACTURER_DEVICE_LIST_PATH='/rent/cabinet/list';
+
+export class ManufacturerError extends DomainError {constructor(message:string,status=502,public readonly kind:'AUTH'|'TIMEOUT'|'UNAVAILABLE'|'MALFORMED'|'API'|'PHYSICAL_BLOCKED'='UNAVAILABLE'){super(message,status);}}
+export class ManufacturerApiError extends ManufacturerError {constructor(public readonly providerCode:number,message:string){super(message,502,'API');}}
+export interface ManufacturerLog {level:'info'|'warn'|'error';event:string;path:string;status?:number;providerCode?:number;}
+export type ManufacturerLogger=(entry:ManufacturerLog)=>void;
+export type ManufacturerTransport=(url:string,init:RequestInit)=>Promise<Response>;
+export interface ManufacturerConfig {baseUrl:string;username:string;password:string;timeoutMs?:number;allowPhysicalActions?:false;}
+export type ManufacturerEndpointAuth=(path:string)=>Record<string,string>;
+export interface ManufacturerDeviceQuery {deviceId:string;}
+export interface ManufacturerListQuery {coordType:string;zoomLevel:number;lat:number;lng:number;showPrice:boolean;}
+export interface ManufacturerBatterySnapshot {id:string;slot:number;voltage:number;}
+export interface ManufacturerSlotSnapshot {position:number;battery:ManufacturerBatterySnapshot|null;}
+export interface ManufacturerDeviceSnapshot {deviceId:string;cabinetId:string;qrCode:string;online:boolean;totalSlots:number;emptySlots:number;busySlots:number;signal:string;type:string;ip:string;shopId:string;shopName:string;shopAddress:string;latitude:number|null;longitude:number|null;batteries:ManufacturerBatterySnapshot[];slots:ManufacturerSlotSnapshot[];availability:number;lastSeenAt:null;}
+export interface ManufacturerStationSummary {shopId:string;name:string;address:string;latitude:number;longitude:number;batteryCount:number;freeCount:number;informationStatus:string;}
+/** Future domain contract only. No manufacturer write endpoint is implemented or called. */
+export interface ManufacturerPhysicalActions {eject(stationExternalId:string):Promise<void>;ejectSlot(stationExternalId:string,slot:number):Promise<void>;operateDevice(stationExternalId:string,operation:string):Promise<void>;}
+
+const nonEmpty=z.string().min(1);
+const batterySchema=z.object({slotNum:z.number().int().positive(),vol:z.number(),batteryId:nonEmpty}).passthrough();
+const cabinetSchema=z.object({ip:z.string(),remark:z.string(),type:z.string(),slots:z.number().int().nonnegative(),qrCode:z.string(),online:z.boolean(),emptySlots:z.number().int().nonnegative(),busySlots:z.number().int().nonnegative(),id:nonEmpty,shopId:z.string(),signal:z.string(),posDeviceId:z.string()}).passthrough();
+const shopSchema=z.object({address:z.string(),priceMinute:z.string(),city:z.string(),dailyMaxPrice:z.number(),latitude:z.string(),openingTime:z.string(),freeMinutes:z.number(),icon:z.string(),content:z.string(),province:z.string(),price:z.number(),name:z.string(),deposit:z.number(),logo:z.string(),id:z.string(),region:z.string(),longitude:z.string()}).passthrough();
+const deviceResponseSchema=z.object({msg:z.string(),code:z.number().int(),data:z.object({priceStrategy:z.object({depositAmount:z.number(),priceMinute:z.number(),autoRefund:z.number(),timeoutAmount:z.number(),timeoutDay:z.number(),dailyMaxPrice:z.number(),freeMinutes:z.number(),currencySymbol:z.string(),price:z.number(),name:z.string(),currency:z.string(),shopId:z.string()}).passthrough(),shop:shopSchema,batteries:z.array(batterySchema),cabinet:cabinetSchema}).passthrough()}).passthrough();
+const listItemSchema=z.object({price:z.object({priceId:z.number(),freeDuration:z.string(),price:z.string(),chargeUnit:z.string(),dailyCapAmount:z.string(),deposit:z.string()}).passthrough(),cabinet:z.object({batteryNum:z.string(),freeNum:z.string(),infoStatus:z.string()}).passthrough(),shop:z.object({id:z.string(),shopName:z.string(),shopAddress:z.string(),mobile:z.string(),distance:z.string(),longitude:z.string(),latitude:z.string(),shopBanner:z.string(),shopIcon:z.string(),distanceNumber:z.number(),sceneType:z.string()}).passthrough()}).passthrough();
+const listResponseSchema=z.object({msg:z.string(),code:z.number().int(),list:z.array(listItemSchema)}).passthrough();
+const parseResponse=<T extends z.ZodTypeAny>(schema:T,value:unknown):z.infer<T>=>{const parsed=schema.safeParse(value);if(!parsed.success)throw new ManufacturerError('Réponse fabricant mal formée.',502,'MALFORMED');return parsed.data;};
+
+const finite=(value:string,label:string)=>{const parsed=Number(value);if(!Number.isFinite(parsed))throw new ManufacturerError(`Réponse fabricant invalide (${label}).`,502,'MALFORMED');return parsed;};
+const count=(value:string,label:string)=>{const parsed=Number(value);if(!Number.isSafeInteger(parsed)||parsed<0)throw new ManufacturerError(`Réponse fabricant invalide (${label}).`,502,'MALFORMED');return parsed;};
+const safeBase64=(value:string)=>{let binary='';for(const byte of new TextEncoder().encode(value))binary+=String.fromCharCode(byte);return btoa(binary);};
+
+export class ManufacturerHttpClient {
+ private readonly baseUrl:string;
+ private readonly timeoutMs:number;
+ private readonly endpointAuth:ManufacturerEndpointAuth;
+ constructor(config:ManufacturerConfig,private readonly transport:ManufacturerTransport=(url,init)=>fetch(url,init),private readonly logger:ManufacturerLogger=()=>{},endpointAuth?:ManufacturerEndpointAuth){
+  if(config.allowPhysicalActions!==undefined&&config.allowPhysicalActions!==false)throw new ManufacturerError('Les actions physiques fabricant sont désactivées.',503,'PHYSICAL_BLOCKED');
+  if(!config.username||!config.password)throw new ManufacturerError('Identifiants fabricant manquants.',503,'AUTH');
+  const base=new URL(config.baseUrl);if(base.protocol!=='https:'||base.username||base.password)throw new ManufacturerError('L’API fabricant doit utiliser une URL HTTPS sans identifiants.',503,'AUTH');
+  this.baseUrl=base.toString().replace(/\/$/,'');this.timeoutMs=config.timeoutMs??8_000;
+  this.endpointAuth=endpointAuth??(path=>{if(![MANUFACTURER_DEVICE_INFO_PATH,MANUFACTURER_DEVICE_LIST_PATH].includes(path))throw new ManufacturerError('Mode d’authentification non documenté pour cet endpoint.',503,'AUTH');return {Authorization:`Basic ${safeBase64(`${config.username}:${config.password}`)}`};});
+ }
+ async getDeviceInfo(query:ManufacturerDeviceQuery){const payload=parseResponse(deviceResponseSchema,await this.request('GET',MANUFACTURER_DEVICE_INFO_PATH,{deviceId:query.deviceId}));this.throwProviderError(payload.code,payload.msg,MANUFACTURER_DEVICE_INFO_PATH);return mapDevice(query.deviceId,payload.data);}
+ async listDevices(query:ManufacturerListQuery){const payload=parseResponse(listResponseSchema,await this.request('POST',MANUFACTURER_DEVICE_LIST_PATH,{coordType:query.coordType,zoomLevel:String(query.zoomLevel),lat:String(query.lat),lng:String(query.lng),showPrice:String(query.showPrice)}));this.throwProviderError(payload.code,payload.msg,MANUFACTURER_DEVICE_LIST_PATH);return payload.list.map(item=>({shopId:item.shop.id,name:item.shop.shopName,address:item.shop.shopAddress,latitude:finite(item.shop.latitude,'latitude'),longitude:finite(item.shop.longitude,'longitude'),batteryCount:count(item.cabinet.batteryNum,'batteryNum'),freeCount:count(item.cabinet.freeNum,'freeNum'),informationStatus:item.cabinet.infoStatus}));}
+ private throwProviderError(code:number,msg:string,path:string){if(code!==0){this.logger({level:'warn',event:'manufacturer_api_error',path,providerCode:code});throw new ManufacturerApiError(code,msg||'Erreur API fabricant.');}}
+ private async request(method:'GET'|'POST',path:string,params:Record<string,string>){
+  const url=new URL(this.baseUrl+path);for(const [key,value] of Object.entries(params))url.searchParams.set(key,value);const controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),this.timeoutMs);
+  try{const response=await this.transport(url.toString(),{method,headers:{...this.endpointAuth(path),Accept:'application/json'},signal:controller.signal});if(response.status===401||response.status===403){this.logger({level:'warn',event:'manufacturer_auth_error',path,status:response.status});throw new ManufacturerError('Authentification fabricant refusée.',502,'AUTH');}if(!response.ok){this.logger({level:'error',event:'manufacturer_http_error',path,status:response.status});throw new ManufacturerError('API fabricant indisponible.',503,'UNAVAILABLE');}const raw=await response.text();if(raw.length>1_000_000)throw new ManufacturerError('Réponse fabricant trop volumineuse.',502,'MALFORMED');try{return JSON.parse(raw) as unknown;}catch{throw new ManufacturerError('Réponse fabricant illisible.',502,'MALFORMED');}}
+  catch(error){if(controller.signal.aborted){this.logger({level:'warn',event:'manufacturer_timeout',path});throw new ManufacturerError('Délai de réponse fabricant dépassé.',504,'TIMEOUT');}if(error instanceof ManufacturerError)throw error;this.logger({level:'error',event:'manufacturer_unavailable',path});throw new ManufacturerError('API fabricant indisponible.',503,'UNAVAILABLE');}finally{clearTimeout(timeout);}
+ }
+}
+
+function mapDevice(deviceId:string,data:z.infer<typeof deviceResponseSchema>['data']):ManufacturerDeviceSnapshot {const positions=new Set<number>(),batteryIds=new Set<string>();for(const battery of data.batteries){if(battery.slotNum>data.cabinet.slots||positions.has(battery.slotNum)||batteryIds.has(battery.batteryId))throw new ManufacturerError('Réponse fabricant incohérente (slots/batteries).',502,'MALFORMED');positions.add(battery.slotNum);batteryIds.add(battery.batteryId);}const batteries=data.batteries.map(b=>({id:b.batteryId,slot:b.slotNum,voltage:b.vol}));const bySlot=new Map(batteries.map(b=>[b.slot,b]));return {deviceId,cabinetId:data.cabinet.id,qrCode:data.cabinet.qrCode,online:data.cabinet.online,totalSlots:data.cabinet.slots,emptySlots:data.cabinet.emptySlots,busySlots:data.cabinet.busySlots,signal:data.cabinet.signal,type:data.cabinet.type,ip:data.cabinet.ip,shopId:data.shop.id,shopName:data.shop.name,shopAddress:data.shop.address,latitude:data.shop.latitude===''?null:finite(data.shop.latitude,'latitude'),longitude:data.shop.longitude===''?null:finite(data.shop.longitude,'longitude'),batteries,slots:Array.from({length:data.cabinet.slots},(_,index)=>({position:index+1,battery:bySlot.get(index+1)??null})),availability:batteries.length,lastSeenAt:null};}
+
+/** Read-only manufacturer adapter. Every mutating/physical method fails closed. */
+export class ManufacturerBatteryStationProvider implements BatteryStationProvider {
+ constructor(private readonly client:ManufacturerHttpClient){}
+ getStation(d:Data,id:string){const station=d.stations.find(s=>s.id===id||s.publicId===id||s.providerDeviceId===id);if(!station)throw new DomainError('Station introuvable.',404);return station;}
+ getAvailability(d:Data,id:string){const station=this.getStation(d,id);return d.slots.filter(slot=>slot.stationId===station.id&&d.batteries.some(b=>b.id===slot.batteryId&&b.status==='AVAILABLE')).length;}
+ getDeviceInfo(deviceId:string){return this.client.getDeviceInfo({deviceId});}
+ listDevices(query:ManufacturerListQuery){return this.client.listDevices(query);}
+ ejectBattery(...args:Parameters<BatteryStationProvider['ejectBattery']>):string{void args;throw this.physicalBlocked();}
+ returnBattery(...args:Parameters<BatteryStationProvider['returnBattery']>):void{void args;throw this.physicalBlocked();}
+ setOnline(...args:Parameters<BatteryStationProvider['setOnline']>):void{void args;throw this.physicalBlocked();}
+ simulateFailure(...args:Parameters<BatteryStationProvider['simulateFailure']>):void{void args;throw this.physicalBlocked();}
+ private physicalBlocked(){return new ManufacturerError('Action physique fabricant interdite en mode READ-ONLY.',403,'PHYSICAL_BLOCKED');}
+}
+
+export interface ManufacturerStationDifference {kind:'ONLINE_STATUS'|'AVAILABILITY'|'CAPACITY'|'SLOT_BATTERY';position?:number;local:unknown;provider:unknown;}
+export interface ProviderContractDrift {path:string;kind:'ADDED_FIELD'|'MISSING_FIELD'|'TYPE_CHANGED';expected?:string;observed?:string;critical:boolean;}
+/** Compares observed provider payload shape without assigning undocumented business meaning. */
+export function detectProviderContractDrift(expected:unknown, observed:unknown, path='$'):ProviderContractDrift[]{
+ const result:ProviderContractDrift[]=[];
+ if(Array.isArray(expected)||Array.isArray(observed)){if(Array.isArray(expected)!==Array.isArray(observed))result.push({path,kind:'TYPE_CHANGED',expected:Array.isArray(expected)?'array':'object',observed:Array.isArray(observed)?'array':typeof observed,critical:true});return result;}
+ if(expected===null||observed===null||typeof expected!=='object'||typeof observed!=='object'){if(typeof expected!==typeof observed)result.push({path,kind:'TYPE_CHANGED',expected:typeof expected,observed:typeof observed,critical:true});return result;}
+ const expectedKeys=new Set(Object.keys(expected as object)), observedKeys=new Set(Object.keys(observed as object));
+ for(const key of expectedKeys)if(!observedKeys.has(key))result.push({path:`${path}.${key}`,kind:'MISSING_FIELD',expected:typeof (expected as Record<string,unknown>)[key],critical:false});
+ for(const key of observedKeys)if(!expectedKeys.has(key))result.push({path:`${path}.${key}`,kind:'ADDED_FIELD',observed:typeof (observed as Record<string,unknown>)[key],critical:false});
+ for(const key of expectedKeys)if(observedKeys.has(key))result.push(...detectProviderContractDrift((expected as Record<string,unknown>)[key],(observed as Record<string,unknown>)[key],`${path}.${key}`));
+ return result;
+}
+export function reconcileManufacturerStation(d:Data,localStation:Station,snapshot:ManufacturerDeviceSnapshot):ManufacturerStationDifference[]{const differences:ManufacturerStationDifference[]=[];if(localStation.online!==snapshot.online)differences.push({kind:'ONLINE_STATUS',local:localStation.online,provider:snapshot.online});if(localStation.capacity!==snapshot.totalSlots)differences.push({kind:'CAPACITY',local:localStation.capacity,provider:snapshot.totalSlots});const localAvailability=d.slots.filter(slot=>slot.stationId===localStation.id&&d.batteries.some(b=>b.id===slot.batteryId&&b.status==='AVAILABLE')).length;if(localAvailability!==snapshot.availability)differences.push({kind:'AVAILABILITY',local:localAvailability,provider:snapshot.availability});for(const providerSlot of snapshot.slots){const local=d.slots.find(slot=>slot.stationId===localStation.id&&slot.position===providerSlot.position);const providerBattery=providerSlot.battery?.id??null;if((local?.batteryId??null)!==providerBattery)differences.push({kind:'SLOT_BATTERY',position:providerSlot.position,local:local?.batteryId??null,provider:providerBattery});}return differences;}
+
+/** Applies only unambiguous telemetry. Slot/battery differences require operator review. */
+export function applyManufacturerStationTelemetry(d:Data,stationId:string,snapshot:ManufacturerDeviceSnapshot,syncedAt=Date.now()){const station=d.stations.find(s=>s.id===stationId);if(!station)throw new DomainError('Station introuvable.',404);if(station.providerDeviceId&&station.providerDeviceId!==snapshot.deviceId)throw new ManufacturerError('Identifiant fabricant incohérent pour cette station.',409,'MALFORMED');const differences=reconcileManufacturerStation(d,station,snapshot);station.provider='manufacturer';station.providerDeviceId=snapshot.deviceId;station.providerStatus=snapshot.online?'ONLINE':'OFFLINE';station.providerLastSyncedAt=syncedAt;return {station,differences};}
+
+export function resolveManufacturerConfig(env:Record<string,string|undefined>):ManufacturerConfig|undefined {if((env.MANUFACTURER_ALLOW_PHYSICAL_ACTIONS??'false')!=='false')throw new ManufacturerError('MANUFACTURER_ALLOW_PHYSICAL_ACTIONS doit rester false.',503,'PHYSICAL_BLOCKED');const provider=env.MANUFACTURER_PROVIDER?.trim().toLowerCase();if(!provider){if(env.MANUFACTURER_USERNAME||env.MANUFACTURER_PASSWORD)throw new ManufacturerError('MANUFACTURER_PROVIDER=bajie est requis lorsque des credentials fabricant sont configurés.',503,'AUTH');return undefined;}if(provider==='disabled'){if(env.MANUFACTURER_USERNAME||env.MANUFACTURER_PASSWORD)throw new ManufacturerError('Credentials fabricant présents alors que le provider est désactivé.',503,'AUTH');return undefined;}if(provider!=='bajie')throw new ManufacturerError('Provider fabricant non supporté.',503,'AUTH');const username=env.MANUFACTURER_USERNAME,password=env.MANUFACTURER_PASSWORD,baseUrl=env.MANUFACTURER_API_BASE_URL;if(!username||!password||!baseUrl)throw new ManufacturerError('Configuration Bajie incomplète : URL, username et password sont requis.',503,'AUTH');return {baseUrl,username,password,allowPhysicalActions:false};}
+export function validateManufacturerStartup(env:Record<string,string|undefined>):ManufacturerConfig|undefined {const config=resolveManufacturerConfig(env);if(config&&!env.MANUFACTURER_SYNC_SECRET)throw new ManufacturerError('MANUFACTURER_SYNC_SECRET est requis pour le scheduler staging.',503,'AUTH');return config;}

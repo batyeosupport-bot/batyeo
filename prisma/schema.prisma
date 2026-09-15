@@ -1,0 +1,372 @@
+generator client {
+  provider = "prisma-client-js"
+  engineType = "client"
+}
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+enum Role {
+  SUPER_ADMIN
+  ADMIN
+  OPERATIONS
+  FINANCE
+  SUPPORT
+  PARTNER_ADMIN
+  PARTNER_USER
+}
+enum RentalState {
+  CREATED
+  PAYMENT_AUTH
+  EJECTING
+  ACTIVE
+  RETURN_PENDING
+  RETURNED
+  COMPLETED
+  PAYMENT_FAILED
+  EJECTION_FAILED
+  CANCELLED
+  EXPIRED
+  OVERDUE
+  ERROR
+}
+model User {
+  id           String @id @default(uuid())
+  email        String @unique
+  name         String
+  passwordHash String
+  partnerId String?
+  disabledAt DateTime?
+  authVersion Int @default(0)
+  role         Role
+  memberships  PartnerUser[]
+  sessions     Session[]
+  auditLogs    AuditLog[]
+}
+model Session {
+  id        String @id
+  userId    String
+  expiresAt DateTime
+  authVersion Int @default(0)
+  user      User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@index([userId])
+  @@index([expiresAt])
+}
+model Partner {
+  id            String @id @default(uuid())
+  name          String
+  city          String
+  commissionBps Int @default(2000)
+  venues        Venue[]
+  users         PartnerUser[]
+  rentals       Rental[]
+  tickets       SupportTicket[]
+}
+model PartnerUser {
+  id        String @id @default(uuid())
+  userId    String
+  partnerId String
+  user      User @relation(fields: [userId], references: [id])
+  partner   Partner @relation(fields: [partnerId], references: [id])
+  @@unique([userId, partnerId])
+}
+model Venue {
+  id        String @id @default(uuid())
+  partnerId String
+  name      String
+  city      String
+  address   String
+  category  String
+  hours     String
+  latitude  Float?
+  longitude Float?
+  partner   Partner @relation(fields: [partnerId], references: [id])
+  stations  Station[]
+  @@index([partnerId])
+  @@unique([id, partnerId])
+}
+model Media {
+  id               String   @id
+  name             String
+  kind             String
+  uri              String
+  checksum         String
+  durationMs       Int
+  status           String   @default("DRAFT")
+  startsAt         DateTime?
+  endsAt           DateTime?
+  targetStationIds Json
+  createdAt        DateTime @default(now())
+  @@index([status])
+}
+model Station {
+  id            String @id @default(uuid())
+  publicId      String @unique
+  venueId       String
+  partnerId     String
+  online        Boolean @default(true)
+  failure       String @default("none")
+  capacity      Int
+  provider      String @default("mock")
+  providerDeviceId String?
+  providerStatus String?
+  providerLastSyncedAt DateTime?
+  lastSeenAt DateTime?
+  venue         Venue @relation(fields: [venueId, partnerId], references: [id, partnerId])
+  slots         Slot[]
+  departures    Rental[] @relation("departure")
+  returns       Rental[] @relation("return")
+  @@index([venueId])
+  @@index([providerDeviceId])
+  @@unique([id, partnerId])
+}
+model Slot {
+  id        String @id @default(uuid())
+  stationId String
+  position  Int
+  batteryId String? @unique
+  station   Station @relation(fields: [stationId], references: [id])
+  battery   Battery? @relation(fields: [batteryId], references: [id])
+  @@unique([stationId, position])
+}
+model Battery {
+  id      String @id @default(uuid())
+  charge  Int
+  status  String
+  slot    Slot?
+  rentals Rental[]
+}
+model PricingStrategy {
+  id             String @id @default(uuid())
+  hourlyCents    Int
+  capCents       Int
+  depositCents   Int
+  deadlineHours  Int
+  commissionBps  Int
+  active         Boolean @default(false)
+  rentals        Rental[]
+}
+model Rental {
+  id              String @id @default(uuid())
+  customerId      String
+  partnerId       String
+  stationId       String
+  returnStationId String?
+  batteryId       String?
+  pricingId       String
+  pricingSnapshot Json
+  idempotencyKey  String
+  state           RentalState @default(CREATED)
+  paymentState    String?
+  physicalState   String?
+  createdAt       DateTime @default(now())
+  startedAt       DateTime?
+  returnedAt      DateTime?
+  deadline        DateTime?
+  amountCents     Int @default(0)
+  commissionCents Int @default(0)
+  simulatedMinutes Int @default(0)
+  error           String?
+  partner         Partner @relation(fields: [partnerId], references: [id])
+  station         Station @relation("departure", fields: [stationId, partnerId], references: [id, partnerId])
+  returnStation   Station? @relation("return", fields: [returnStationId], references: [id])
+  battery         Battery? @relation(fields: [batteryId], references: [id])
+  pricing         PricingStrategy @relation(fields: [pricingId], references: [id])
+  events          RentalEvent[]
+  payment         Payment?
+  termsAcceptance TermsAcceptance?
+  @@unique([customerId, idempotencyKey])
+  @@index([partnerId, createdAt])
+  @@index([state, deadline])
+}
+model RentalEvent {
+  id       String @id @default(uuid())
+  rentalId String
+  at       DateTime @default(now())
+  type     String
+  detail   String
+  rental   Rental @relation(fields: [rentalId], references: [id])
+  @@index([rentalId, at])
+}
+model Payment {
+  id              String @id @default(uuid())
+  rentalId        String @unique
+  authorizedCents Int
+  capturedCents   Int @default(0)
+  releasedCents   Int @default(0)
+  status          String
+  provider        String @default("mock")
+  providerReference String?
+  error           String?
+  requestedCents  Int?
+  rental          Rental @relation(fields: [rentalId], references: [id])
+}
+model TermsAcceptance {
+  id         String @id @default(uuid())
+  rentalId   String @unique
+  customerId String
+  version    String
+  acceptedAt DateTime @default(now())
+  rental     Rental @relation(fields: [rentalId], references: [id])
+}
+model SupportTicket {
+  id        String @id @default(uuid())
+  partnerId String?
+  email     String
+  subject   String
+  message   String
+  status    String @default("OPEN")
+  createdAt DateTime @default(now())
+  rentalId String?
+  stationId String?
+  batteryId String?
+  paymentId String?
+  partner   Partner? @relation(fields: [partnerId], references: [id])
+  @@index([partnerId, status])
+  @@index([rentalId])
+}
+model AuditLog {
+  id     String @id @default(uuid())
+  userId String
+  action String
+  at     DateTime @default(now())
+  user   User @relation(fields: [userId], references: [id])
+  @@index([at])
+}
+
+model CustomerSession {
+  id String @id
+  expiresAt DateTime
+  @@index([expiresAt])
+}
+model WebhookEvent {
+  id String @id
+  source String
+  externalId String
+  payloadHash String
+  payload Json
+  receivedAt DateTime
+  processedAt DateTime?
+  status String
+  error String?
+  @@unique([source, externalId])
+  @@index([status, receivedAt])
+}
+model StationProviderLink {
+  id String @id
+  stationId String
+  manufacturer String
+  externalId String
+  active Boolean @default(true)
+  createdAt DateTime
+  updatedAt DateTime
+  @@unique([manufacturer, externalId])
+  @@index([stationId, active])
+}
+model StationProviderSnapshot {
+  id String @id
+  linkId String @unique
+  stationId String
+  syncedAt DateTime
+  online Boolean
+  totalSlots Int
+  emptySlots Int
+  busySlots Int
+  availability Int
+  signal String
+  deviceType String
+  ip String
+  shopId String
+  shopName String
+  shopAddress String
+  slots Json
+  @@index([stationId, syncedAt])
+}
+model ReconciliationRecord {
+  id String @id
+  stationId String
+  linkId String
+  kind String
+  position Int?
+  localValue Json
+  providerValue Json
+  status String
+  firstDetectedAt DateTime
+  lastDetectedAt DateTime
+  resolvedAt DateTime?
+  @@index([stationId, status, lastDetectedAt])
+  @@index([linkId, status])
+}
+model ManufacturerSyncRun {
+  id String @id
+  provider String
+  trigger String
+  requestedBy String?
+  startedAt DateTime
+  completedAt DateTime?
+  status String
+  total Int
+  succeeded Int
+  failed Int
+  mismatches Int
+  errorSummary Json
+  @@index([status, startedAt])
+  @@index([provider, startedAt])
+}
+model RateLimit {
+  id String @id
+  count Int
+  expiresAt DateTime
+  @@index([expiresAt])
+}
+// Serializes domain snapshots for this modular monolith. Replace with aggregate locks
+// only with equivalent cross-aggregate invariants and concurrency regression coverage.
+model CoreRevision {
+  id Int @id
+  version Int @default(0)
+}
+model RuntimeCredential {
+  id String @id
+  runtimeId String @unique
+  stationId String
+  partnerId String
+  digest String
+  version Int @default(1)
+  createdAt DateTime
+  lastUsedAt DateTime?
+  revokedAt DateTime?
+  @@index([stationId, revokedAt])
+  @@index([partnerId])
+}
+model RuntimeEnrollmentToken {
+  id String @id
+  stationId String
+  partnerId String
+  digest String
+  createdAt DateTime
+  expiresAt DateTime
+  usedAt DateTime?
+  @@index([stationId, expiresAt])
+  @@index([partnerId, expiresAt])
+}
+model HardwareDiscoveryReport {
+  id String @id
+  stationId String
+  runtimeId String
+  collectedAt DateTime
+  report Json
+  @@index([stationId, collectedAt])
+  @@index([runtimeId, collectedAt])
+}
+model StationCapability {
+  id String @id
+  stationId String
+  capability String
+  status String
+  source String
+  verifiedAt DateTime?
+  evidence String?
+  version String?
+  @@unique([stationId, capability])
+  @@index([stationId, status])
+}

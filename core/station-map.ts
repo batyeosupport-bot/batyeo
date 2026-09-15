@@ -1,0 +1,4 @@
+import type {MobileStation} from './mobile';
+export interface MapStation extends MobileStation {distanceKm?:number;canReturn:boolean;}
+export function mapStations(stations:MobileStation[],location?:{latitude:number;longitude:number}):MapStation[]{const source=location?stationsNearbySafe(stations,location):stations;return source.map(s=>({...s,canReturn:s.online&&s.freeSlots>0}));}
+function stationsNearbySafe(stations:MobileStation[],location:{latitude:number;longitude:number}){const earth=6371;return stations.map((s,i)=>{if(s.latitude==null||s.longitude==null)return {s,i,d:Number.POSITIVE_INFINITY};const p=Math.PI/180,dLat=(s.latitude-location.latitude)*p,dLon=(s.longitude-location.longitude)*p;const a=Math.sin(dLat/2)**2+Math.cos(location.latitude*p)*Math.cos(s.latitude*p)*Math.sin(dLon/2)**2;return {s,i,d:2*earth*Math.asin(Math.sqrt(a))};}).filter(x=>x.d<=50).sort((a,b)=>a.d-b.d||a.i-b.i).map(x=>x.s);}

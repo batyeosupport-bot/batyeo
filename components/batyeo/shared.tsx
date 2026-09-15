@@ -1,0 +1,36 @@
+/* eslint-disable @next/next/no-html-link-for-pages */
+'use client';
+import {useCallback,useEffect,useState,type ReactNode} from 'react';
+import {ArrowUpRight,ArrowRight,Zap,LoaderCircle,AlertCircle,Search,ChevronLeft,ChevronRight} from 'lucide-react';
+import {Button} from '@/components/ui/button';
+import {Input} from '@/components/ui/input';
+import {Skeleton} from '@/components/ui/skeleton';
+import {Table,TableBody,TableCell,TableHead,TableHeader,TableRow} from '@/components/ui/table';
+import {Select,SelectContent,SelectItem,SelectTrigger,SelectValue} from '@/components/ui/select';
+import type {dashboard,rentalView,stationViews} from '@/core/queries';
+import type {PricingStrategy} from '@/core/pricing';
+export type Dashboard=ReturnType<typeof dashboard>;
+export type RentalView=ReturnType<typeof rentalView>;
+export type StationView=ReturnType<typeof stationViews>[number];
+export type PublicData={stations:StationView[];pricing:PricingStrategy;demo:boolean};
+export async function api<T>(path:string,body?:unknown):Promise<T>{const r=await fetch('/api/core/'+path,{method:body===undefined?'GET':'POST',headers:body===undefined?undefined:{'Content-Type':'application/json'},body:body===undefined?undefined:JSON.stringify(body)});const d=await r.json();if(!r.ok)throw new Error(typeof d==='object'&&d!==null&&'error' in d?String(d.error):'Une erreur est survenue.');return d as T;}
+export function useApi<T>(path:string,interval=0){const [data,setData]=useState<T|null>(null),[error,setError]=useState(''),[loading,setLoading]=useState(true);const refresh=useCallback(async()=>{try{setData(await api<T>(path));setError('');}catch(e){setError(e instanceof Error?e.message:'Service indisponible.');}finally{setLoading(false);}},[path]);useEffect(()=>{const initial=setTimeout(()=>void refresh(),0);const timer=interval?setInterval(()=>{if(!document.hidden)void refresh();},interval):undefined;return()=>{clearTimeout(initial);if(timer)clearInterval(timer);};},[refresh,interval]);return{data,error,loading,refresh};}
+export function Brand({inverse=false}: {inverse?:boolean}){return <a href="/" aria-label="BATYEO accueil" className={'brand '+(inverse?'inverse':'')}><span className="brand-mark"><Zap size={23} fill="currentColor" strokeWidth={1.4}/></span>batyeo<span className="brand-period">.</span></a>;}
+export function Cta({href,children,light=false,outline=false}: {href:string;children:ReactNode;light?:boolean;outline?:boolean}){return <a href={href} className={'cta '+(light?'lime ':'')+(outline?'outline ':'')}><span>{children}</span><ArrowUpRight size={18}/></a>;}
+export function Eyebrow({children}: {children:ReactNode}){return <p className="eyebrow">{children}</p>;}
+export function ErrorBox({message,retry}: {message:string;retry?:()=>void}){return <div role="alert" className="error-box"><AlertCircle size={20}/><span>{message}</span>{retry&&<Button variant="outline" onClick={retry}>Réessayer</Button>}</div>;}
+export function Loading(){return <div className="loading-state" aria-label="Chargement" aria-busy="true"><Skeleton className="h-8 w-52"/><Skeleton className="h-36 w-full"/><Skeleton className="h-24 w-full"/></div>;}
+export function Busy(){return <LoaderCircle className="spin" size={18}/>;}
+export function Empty({children}: {children:ReactNode}){return <div className="empty-state"><Search size={28}/><h3>Aucun résultat</h3><p>{children}</p></div>;}
+export const stateLabels:Record<string,string>={ACTIVE:'En cours',OVERDUE:'En retard',COMPLETED:'Terminée',CREATED:'Créée',PAYMENT_AUTH:'Autorisée',EJECTING:'Préparation',RETURN_PENDING:'Retour en cours',RETURNED:'Rendue',PAYMENT_FAILED:'Paiement refusé',EJECTION_FAILED:'Éjection échouée',CANCELLED:'Annulée',EXPIRED:'Expirée',ERROR:'Erreur',AUTHORIZED:'Autorisée',CAPTURED:'Capturé',RELEASED:'Libérée',FAILED:'Échec',AVAILABLE:'Disponible',RENTED:'En location',MAINTENANCE:'Maintenance',OPEN:'Ouvert',RESOLVED:'Résolu'};
+export function Status({value}: {value:string}){return <span className={'status '+(['ACTIVE','AVAILABLE','COMPLETED','CAPTURED','RESOLVED','online'].includes(value)?'good':['OVERDUE','EJECTION_FAILED','PAYMENT_FAILED','ERROR','FAILED','offline'].includes(value)?'bad':'neutral')}><span/>{value==='online'?'En ligne':value==='offline'?'Hors ligne':stateLabels[value]??value}</span>;}
+export function Picker({value,onChange,options,label}: {value:string;onChange:(v:string)=>void;options:{value:string;label:string}[];label:string}){return <Select value={value} onValueChange={onChange}><SelectTrigger aria-label={label} className="picker"><SelectValue placeholder={label}/></SelectTrigger><SelectContent>{options.map(o=><SelectItem value={o.value} key={o.value}>{o.label}</SelectItem>)}</SelectContent></Select>;}
+export type Column<T>={key:string;label:string;render:(row:T)=>ReactNode;sort?:(row:T)=>string|number};
+export function DataTable<T extends {id:string}>({rows,columns,searchText,placeholder='Rechercher…'}: {rows:T[];columns:Column<T>[];searchText:(row:T)=>string;placeholder?:string}){
+ const [query,setQuery]=useState(''),[page,setPage]=useState(0),[sort,setSort]=useState(''),[ascending,setAscending]=useState(true);
+ const filtered=rows.filter(r=>searchText(r).toLowerCase().includes(query.toLowerCase()));const c=columns.find(c=>c.key===sort);if(c?.sort)filtered.sort((a,b)=>{const x=c.sort!(a),y=c.sort!(b);return(x<y?-1:x>y?1:0)*(ascending?1:-1);});const pageCount=Math.max(1,Math.ceil(filtered.length/8));const current=Math.min(page,pageCount-1);
+ return <div className="data-table"><div className="table-toolbar"><div className="search-field"><Search size={17}/><Input aria-label={placeholder} placeholder={placeholder} value={query} onChange={e=>{setQuery(e.target.value);setPage(0);}}/></div><span className="muted small">{filtered.length} résultat{filtered.length>1?'s':''}</span></div>{filtered.length?<Table><TableHeader><TableRow>{columns.map(c=><TableHead key={c.key}>{c.sort?<button className="sort-button" onClick={()=>{setSort(c.key);setAscending(sort===c.key?!ascending:true);}}>{c.label} <span>{sort===c.key?(ascending?'↑':'↓'):'↕'}</span></button>:c.label}</TableHead>)}</TableRow></TableHeader><TableBody>{filtered.slice(current*8,current*8+8).map(r=><TableRow key={r.id}>{columns.map(c=><TableCell key={c.key}>{c.render(r)}</TableCell>)}</TableRow>)}</TableBody></Table>:<Empty>Essayez une autre recherche ou modifiez vos filtres.</Empty>}<div className="table-bottom"><span>Page {current+1} sur {pageCount}</span><div><Button aria-label="Page précédente" variant="outline" size="icon" disabled={current===0} onClick={()=>setPage(current-1)}><ChevronLeft/></Button><Button aria-label="Page suivante" variant="outline" size="icon" disabled={current>=pageCount-1} onClick={()=>setPage(current+1)}><ChevronRight/></Button></div></div></div>;
+}
+export function TextLink({href,children}: {href:string;children:ReactNode}){return <a className="text-link" href={href}>{children}<ArrowRight size={17}/></a>;}
+export const dateTime=(n:number)=>new Intl.DateTimeFormat('fr-FR',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit',timeZone:'Europe/Paris'}).format(n);
+export function duration(ms:number){const minutes=Math.max(1,Math.floor(ms/60000));return minutes>=60?`${Math.floor(minutes/60)} h ${String(minutes%60).padStart(2,'0')}`:`${minutes} min`;}

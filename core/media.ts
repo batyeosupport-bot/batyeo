@@ -1,0 +1,5 @@
+export type MediaKind='IMAGE'|'VIDEO'; export type MediaStatus='DRAFT'|'PUBLISHED'|'ARCHIVED';
+export interface StationMedia {id:string;name:string;kind:MediaKind;uri:string;checksum:string;durationMs:number;status:MediaStatus;startsAt:number|null;endsAt:number|null;targetStationIds:readonly string[];createdAt:number;}
+export interface Playlist {version:number;items:readonly StationMedia[];issuedAt:number;checksum:string;}
+export function activePlaylist(playlist:Playlist,stationId:string,now=Date.now()){return playlist.items.filter(m=>m.status==='PUBLISHED'&&(m.startsAt===null||m.startsAt<=now)&&(m.endsAt===null||m.endsAt>now)&&(m.targetStationIds.length===0||m.targetStationIds.includes(stationId)));}
+export function validatePlaylist(playlist:Playlist){if(playlist.version<0||!playlist.checksum)throw new Error('Invalid media playlist.');for(const item of playlist.items){if(!/^https:\/\//.test(item.uri))throw new Error('Media URI must be HTTPS.');if(item.durationMs<1000||item.durationMs>86_400_000)throw new Error('Invalid media duration.');}return playlist;}

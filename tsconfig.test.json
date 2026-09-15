@@ -1,0 +1,26 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "outDir": ".test-build",
+    "module": "CommonJS",
+    "moduleResolution": "Node",
+    "incremental": false,
+    "isolatedModules": false
+  },
+  "include": [
+    "core/pricing.ts",
+    "core/state-machine.ts",
+    "core/providers.ts",
+    "core/types.ts",
+    "core/rental.ts",
+    "core/seed.ts",
+    "core/queries.ts",
+    "tests/**/*.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "tests/postgres.integration.ts",
+    "tests/sql.test.ts"
+  ]
+}

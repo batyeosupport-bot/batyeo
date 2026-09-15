@@ -1,0 +1,3 @@
+export interface TerminalPaymentProvider {createPaymentIntent(input:{amountCents:number;currency:string;reference:string}):Promise<{id:string;status:'REQUIRES_ACTION'|'AUTHORIZED'|'FAILED'}>;capturePaymentIntent(id:string,amountCents:number):Promise<void>;cancelPaymentIntent(id:string):Promise<void>;}
+/** Protocol intentionally unknown: Bajie TPE compatibility is not assumed. */
+export class UnconfiguredTerminalPaymentProvider implements TerminalPaymentProvider {private unavailable():never{throw new Error('Terminal payment protocol is not configured.');}createPaymentIntent(){return this.unavailable();}capturePaymentIntent(){return this.unavailable();}cancelPaymentIntent(){return this.unavailable();}}
