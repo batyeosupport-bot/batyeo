@@ -15,6 +15,7 @@ export const audits=record('audits');
 export const sessions=record('sessions');
 export const limits=record('limits');
 export const customerSessions=record('customerSessions');
+export const customerHandoffTokens=record('customerHandoffTokens');
 export const webhookEvents=record('webhookEvents');
 export const stationProviderLinks=sqliteTable('stationProviderLinks',{...columns(),manufacturerKey:text('manufacturer_key').generatedAlwaysAs(sql`json_extract(payload, '$.manufacturer')`),externalKey:text('external_key').generatedAlwaysAs(sql`json_extract(payload, '$.externalId')`),stationKey:text('station_key').generatedAlwaysAs(sql`json_extract(payload, '$.stationId')`),activeKey:integer('active_key').generatedAlwaysAs(sql`json_extract(payload, '$.active')`)},t=>[uniqueIndex('provider_external_unique').on(t.manufacturerKey,t.externalKey),uniqueIndex('provider_station_active_unique').on(t.stationKey,t.manufacturerKey).where(sql`${t.activeKey} = 1`)]);
 export const stationProviderSnapshots=sqliteTable('stationProviderSnapshots',{...columns(),linkKey:text('link_key').generatedAlwaysAs(sql`json_extract(payload, '$.linkId')`)},t=>[uniqueIndex('provider_snapshot_link_unique').on(t.linkKey)]);

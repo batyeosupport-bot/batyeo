@@ -23,7 +23,11 @@ export class StripeRentalCoordinator {
   catch(error){const message=error instanceof Error?error.message:'Stripe authorization failed';await repository.transaction(d=>this.engine.markPaymentFailed(d,created.id,message,'stripe',now));return (await repository.read()).rentals.find(r=>r.id===created.id)!;}
   await repository.transaction(d=>this.engine.markPaymentAuthorized(d,created.id,created.pricing.depositCents,'stripe',intent.id,now));
   try {
-   const active=await repository.transaction(d=>{const r=this.engine.beginEjection(d,created.id,now);const battery=this.station.ejectBattery(d,stationId);d.events.push({id:crypto.randomUUID(),rentalId:r.id,at:now,type:'BATTERY_EJECTED',detail:`Batterie ${battery} libérée`});return this.engine.activateWithBattery(d,r.id,battery,now);});
+   const active=await repository.transaction(d=>{
+    const before=d.rentals.find(r=>r.id===created.id)!;
+    if(before.state==='ACTIVE')return before;
+    const r=this.engine.beginEjection(d,created.id,now);const battery=this.station.ejectBattery(d,stationId);d.events.push({id:crypto.randomUUID(),rentalId:r.id,at:now,type:'BATTERY_EJECTED',detail:`Batterie ${battery} libérée`});return this.engine.activateWithBattery(d,r.id,battery,now);
+   });
    return active;
   } catch(error) {
    const message=error instanceof Error?error.message:'Éjection impossible';
@@ -44,6 +48,19 @@ export class StripeRentalCoordinator {
   return repository.transaction(d=>this.engine.markPaymentCaptured(d,rentalId,prepared.amountCents,intent.id,now));
  }
 
+ /** Perte définitive : capture Stripe intégrale de la caution pour une location OVERDUE depuis plus de 48 h. Idempotent. */
+ async captureOverdueLoss(repository:Repository,rentalId:string,now=Date.now()):Promise<Rental>{
+  const snapshot=await repository.read();const rental=snapshot.rentals.find(r=>r.id===rentalId);if(!rental)throw new DomainError('Location introuvable.',404);
+  if(rental.state==='LOST')return rental;
+  if(rental.state!=='OVERDUE')throw new DomainError('Cette location n’est plus en retard : elle a été restituée entre-temps.',409);
+  const payment=snapshot.payments.find(p=>p.rentalId===rentalId);if(!payment?.providerReference)throw new DomainError('Référence Stripe manquante.',503);
+  if(payment.status==='CAPTURED')return repository.transaction(d=>this.engine.markDepositLost(d,rentalId,payment.capturedCents,payment.providerReference??undefined,now));
+  let intent:StripeIntent;
+  try {intent=await this.payment.capture(payment.providerReference,rental.pricing.depositCents,rentalId);}
+  catch(error){const message=error instanceof Error?error.message:'Stripe capture failed';return repository.transaction(d=>this.engine.markPaymentUnknown(d,rentalId,message,now));}
+  return repository.transaction(d=>this.engine.markDepositLost(d,rentalId,rental.pricing.depositCents,intent.id,now));
+ }
+
  /** Webhook-safe projection: never regresses a terminal payment or rental state. */
  async applyWebhook(repository:Repository,event:{id:string;type:string;data:{object:Record<string,unknown>}}){
   return repository.transaction(d=>applyStripeWebhook(d,event));
@@ -56,7 +73,7 @@ export function applyStripeWebhook(d:Data,event:{id:string;type:string;data:{obj
  payment.provider='stripe';payment.providerReference=intentId;
  if(event.type==='payment_intent.amount_capturable_updated'||event.type==='payment_intent.requires_capture'){if(payment.status==='PENDING'||payment.status==='AUTHORIZING'){payment.status='AUTHORIZED';payment.authorizedCents=Number(object.amount??payment.requestedCents??0);payment.requestedCents=payment.authorizedCents;rental.paymentState='AUTHORIZED';}}
  else if(event.type==='payment_intent.succeeded'||event.type==='charge.succeeded'){const captured=Number(object.amount_received??object.amount??0);if(['AUTHORIZED','CAPTURING','UNKNOWN'].includes(payment.status)){if(!Number.isSafeInteger(captured)||captured<0||captured>payment.authorizedCents){payment.status='UNKNOWN';payment.error='Stripe capture amount mismatch';rental.paymentState='UNKNOWN';return {ignored:false,rentalId,mismatch:true};}payment.status='CAPTURED';payment.capturedCents=captured;payment.releasedCents=payment.authorizedCents-captured;rental.paymentState='CAPTURED';if(rental.state==='RETURNED'&&captured===rental.amountCents){rental.state=transition(rental.state,'COMPLETED');d.events.push({id:crypto.randomUUID(),rentalId:rental.id,at:Date.now(),type:'COMPLETED',detail:'Capture Stripe confirmée · location terminée'});}}}
- else if(event.type==='payment_intent.canceled'){if(!['CAPTURED','RELEASED'].includes(payment.status)){payment.status='RELEASED';payment.releasedCents=payment.authorizedCents;payment.capturedCents=0;rental.paymentState='RELEASED';}}
- else if(event.type==='payment_intent.payment_failed'){if(!['CAPTURED','RELEASED'].includes(payment.status)){payment.status='FAILED';payment.error='Stripe payment failed';rental.paymentState='FAILED';}}
+ else if(event.type==='payment_intent.canceled'){if(!['CAPTURED','RELEASED'].includes(payment.status)){payment.status='RELEASED';payment.releasedCents=payment.authorizedCents;payment.capturedCents=0;rental.paymentState='RELEASED';if(['ACTIVE','OVERDUE'].includes(rental.state)){rental.error='Autorisation Stripe annulée de façon inattendue pendant la location.';rental.state=transition(rental.state,'ERROR');d.events.push({id:crypto.randomUUID(),rentalId:rental.id,at:Date.now(),type:'ERROR',detail:rental.error});}}}
+ else if(event.type==='payment_intent.payment_failed'){if(!['CAPTURED','RELEASED'].includes(payment.status)){payment.status='FAILED';payment.error='Stripe payment failed';rental.paymentState='FAILED';if(['ACTIVE','OVERDUE'].includes(rental.state)){rental.error='Échec de paiement Stripe inattendu pendant la location.';rental.state=transition(rental.state,'ERROR');d.events.push({id:crypto.randomUUID(),rentalId:rental.id,at:Date.now(),type:'ERROR',detail:rental.error});}}}
  return {ignored:false,rentalId,paymentStatus:payment.status};
 }

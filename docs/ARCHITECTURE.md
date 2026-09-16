@@ -26,6 +26,7 @@ Le runtime applicatif cible est Node/Next avec PostgreSQL et Prisma (`infrastruc
 - `core/manufacturer.ts` : client HTTP et `ManufacturerBatteryStationProvider` Bajie/ChargeNow strictement READ-ONLY, mapping Zod et erreurs typées.
 - `core/manufacturer-sync.ts` : registre multi-fabricant, synchronisation idempotente et tolérante par station, snapshots normalisés et divergences persistées sans écraser la vérité métier BATYEO.
 - `POST /api/core/internal/manufacturer/sync` : point d’exécution protégé par `MANUFACTURER_SYNC_SECRET`, destiné à un scheduler staging/production. Aucun scheduler externe n’est créé par le repository.
+- `POST /api/core/internal/rentals/capture-overdue-losses` : point d’exécution protégé par `OVERDUE_CAPTURE_SECRET`, destiné au même type de scheduler. Capture intégralement la caution (`core/rental.ts::markDepositLost`, état terminal `LOST`) pour toute location `OVERDUE` depuis plus de 48 h (`OVERDUE_LOSS_GRACE_MS`) — batterie jamais restituée. Aucun scheduler externe n’est créé par le repository.
 - `app/api/core/[...path]/route.ts` : frontière HTTP, validation des entrées, réponses propres.
 - `components/batyeo` : interfaces partagées et design system.
 

@@ -44,5 +44,22 @@ test('PostgreSQL migrations and constraints execute on the PGlite PostgreSQL eng
   await assert.rejects(()=>db.query(`INSERT INTO "Rental" (id,"customerId","partnerId","stationId","pricingId","pricingSnapshot","idempotencyKey",state) VALUES ('r2','c','p','s','standard',$1,'other','CREATED')`,[JSON.stringify(p)]));
   await assert.rejects(()=>db.exec(`INSERT INTO "Payment" (id,"rentalId","authorizedCents","capturedCents","releasedCents",status) VALUES ('pay','r',2000,400,1800,'CAPTURED')`));
   await assert.rejects(()=>db.exec(`UPDATE "Rental" SET "customerId"='other' WHERE id='r'`));
+  // Battery never returned: LOST requires the deposit fully captured, and the battery leaves inventory with it.
+  await db.exec(`BEGIN;
+   UPDATE "Rental" SET state='ACTIVE',"batteryId"='battery',"startedAt"=now(),deadline=now()+interval '48 hours' WHERE id='r';
+   UPDATE "Battery" SET status='RENTED' WHERE id='battery';
+   DELETE FROM "Slot" WHERE id='slot';
+  COMMIT;`);
+  await db.exec(`UPDATE "Rental" SET state='OVERDUE' WHERE id='r'`);
+  await db.exec(`INSERT INTO "Payment" (id,"rentalId","authorizedCents","capturedCents","releasedCents",status) VALUES ('pay-lost','r',2000,0,0,'AUTHORIZED')`);
+  await assert.rejects(()=>db.exec(`UPDATE "Rental" SET state='LOST' WHERE id='r'`),'deposit not yet captured, battery not yet marked lost');
+  await db.exec(`BEGIN;
+   UPDATE "Payment" SET status='CAPTURED',"capturedCents"=2000,"releasedCents"=0 WHERE id='pay-lost';
+   UPDATE "Rental" SET state='LOST' WHERE id='r';
+   UPDATE "Battery" SET status='LOST' WHERE id='battery';
+  COMMIT;`);
+  const lostRental=await db.query<{state:string}>(`SELECT state FROM "Rental" WHERE id='r'`);assert.equal(lostRental.rows[0].state,'LOST');
+  const lostBattery=await db.query<{status:string}>(`SELECT status FROM "Battery" WHERE id='battery'`);assert.equal(lostBattery.rows[0].status,'LOST');
+  await assert.rejects(()=>db.exec(`UPDATE "Rental" SET "amountCents"=1 WHERE id='r'`),'LOST is an immutable terminal state');
  }finally{await db.close();}
 });

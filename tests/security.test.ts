@@ -14,6 +14,8 @@ class MemoryRepository implements Repository {
 }
 const origin='https://batyeo.test';
 function call(repo:Repository,path:string,body?:unknown,token?:string){const request=new Request(origin+'/api/core/'+path,{method:body===undefined?'GET':'POST',headers:{origin,'content-type':'application/json',cookie:token?`batyeo_session=${token}`:''},body:body===undefined?undefined:JSON.stringify(body)});return createApi(repo,{demo:true,allowLegacyCredentials:true})[body===undefined?'GET':'POST'](request,{params:Promise.resolve({path:path.split('/')})});}
+function callAsCustomer(repo:Repository,path:string,body:unknown,customerToken:string){const request=new Request(origin+'/api/core/'+path,{method:'POST',headers:{origin,'content-type':'application/json',cookie:`batyeo_customer=${customerToken}`},body:JSON.stringify(body)});return createApi(repo,{demo:true,allowLegacyCredentials:true}).POST(request,{params:Promise.resolve({path:path.split('/')})});}
+function post(repo:Repository,path:string,body:unknown){const request=new Request(origin+'/api/core/'+path,{method:'POST',headers:{origin,'content-type':'application/json'},body:JSON.stringify(body)});return createApi(repo,{demo:true,allowLegacyCredentials:true}).POST(request,{params:Promise.resolve({path:path.split('/')})});}
 async function authenticated(role='SUPER_ADMIN'){
  const data=seedData('unused');const u=data.users.find(u=>u.role===role)!;const token=crypto.randomUUID()+crypto.randomUUID();const digest=await sha256(token);data.sessions.push({id:digest,userId:u.id,expiresAt:Date.now()+100000,authVersion:0});return {repo:new MemoryRepository(data),token,digest,u};
 }
@@ -25,11 +27,55 @@ test('Tenant membership removal immediately denies reads',async()=>{const {repo,
 test('Session cookies are secure/HttpOnly and malformed cookie values are ignored',()=>{const request=new Request(origin);const value=setCookie(request,'batyeo_session','x'.repeat(64));assert.match(value,/Secure/);assert.match(value,/HttpOnly/);assert.match(value,/SameSite=Lax/);assert.equal(cookie(new Request(origin,{headers:{cookie:'batyeo_session=short'}}),'batyeo_session'),undefined);});
 test('Customer session expiry is enforced on server; no rental is created on GET',async()=>{const repo=new MemoryRepository(seedData('unused'));const count=repo.data.rentals.length;const response=await call(repo,'customer');assert.equal(response.status,200);assert.equal(repo.data.rentals.length,count);assert.equal(repo.data.customerSessions.length,1);repo.data.customerSessions[0].expiresAt=Date.now()-1;assert.throws(()=>requireCustomer(repo.data,repo.data.customerSessions[0].id));});
 test('Native customer session is bearer-based and browser origin guard remains strict',async()=>{const repo=new MemoryRepository(seedData('unused'));const api=createApi(repo,{demo:true,allowLegacyCredentials:true});const response=await api.POST(new Request('https://batyeo.test/api/core/customer/session',{method:'POST',headers:{'x-batyeo-client':'mobile','content-type':'application/json'},body:'{}'}),{params:Promise.resolve({path:['customer','session']})});assert.equal(response.status,200);const body=await response.json() as {sessionToken:string};assert.match(body.sessionToken,/^[a-zA-Z0-9-]{32,128}$/);assert.equal((await api.POST(new Request('https://batyeo.test/api/core/customer/session',{method:'POST',headers:{'content-type':'application/json'},body:'{}'}),{params:Promise.resolve({path:['customer','session']})})).status,403);});
+test('Customer handoff never leaks the session secret and claim mints a distinct session for the same identity',async()=>{
+ const repo=new MemoryRepository(seedData('unused'));
+ const first=await call(repo,'customer');assert.equal(first.status,200);
+ const webToken=first.headers.get('set-cookie')!.match(/batyeo_customer=([a-zA-Z0-9-]+)/)![1];
+ const webDigest=await sha256(webToken);
+ const originalSession=repo.data.customerSessions.find(s=>s.id===webDigest)!;
+ const handoff=await callAsCustomer(repo,'customer/handoff',{},webToken);assert.equal(handoff.status,200);
+ const {handoffToken}=await handoff.json() as {handoffToken:string};
+ assert.notEqual(handoffToken,webToken);
+ const claim=await post(repo,'customer/claim',{handoffToken});assert.equal(claim.status,200);
+ const {sessionToken:mobileToken}=await claim.json() as {sessionToken:string};
+ assert.notEqual(mobileToken,webToken);
+ const mobileDigest=await sha256(mobileToken);const mobileSession=repo.data.customerSessions.find(s=>s.id===mobileDigest)!;
+ assert.equal(mobileSession.customerId,originalSession.customerId);
+ assert.equal((await post(repo,'customer/claim',{handoffToken})).status,401);
+ assert.equal((await post(repo,'customer/claim',{handoffToken:webToken})).status,401);
+});
+test('Customer handoff token expires quickly, independent of the 7-day session',async()=>{
+ const repo=new MemoryRepository(seedData('unused'));
+ const first=await call(repo,'customer');
+ const webToken=first.headers.get('set-cookie')!.match(/batyeo_customer=([a-zA-Z0-9-]+)/)![1];
+ const handoff=await callAsCustomer(repo,'customer/handoff',{},webToken);
+ const {handoffToken}=await handoff.json() as {handoffToken:string};
+ repo.data.customerHandoffTokens[0].expiresAt=Date.now()-1;
+ assert.equal((await post(repo,'customer/claim',{handoffToken})).status,401);
+});
 test('A foreign tenant ticket cannot be resolved',async()=>{const {repo,token}=await authenticated('PARTNER_ADMIN');repo.data.tickets[0].partnerId='partner-b';assert.equal((await call(repo,'resolve-ticket',{id:repo.data.tickets[0].id},token)).status,404);assert.equal(repo.data.tickets[0].status,'OPEN');});
-test('Customer support ticket is linked server-side to the rental context',async()=>{const repo=new MemoryRepository(seedData('unused'));const rental=repo.data.rentals[0];const customerToken='c'.repeat(64);const customerId=await sha256(customerToken);rental.customerId=customerId;repo.data.customerSessions.push({id:customerId,expiresAt:Date.now()+100000});const request=new Request('https://batyeo.test/api/core/ticket',{method:'POST',headers:{origin:'https://batyeo.test','content-type':'application/json','x-batyeo-customer-token':customerToken},body:JSON.stringify({email:'customer@test.fr',subject:'Batterie défectueuse',message:'La batterie ne charge plus correctement.',rentalId:rental.id})});const response=await createApi(repo,{demo:true,allowLegacyCredentials:true}).POST(request,{params:Promise.resolve({path:['ticket']})});assert.equal(response.status,201);const ticket=repo.data.tickets.at(-1)!;assert.equal(ticket.rentalId,rental.id);assert.equal(ticket.stationId,rental.stationId);assert.equal(ticket.batteryId,rental.batteryId);});
+test('Customer support ticket is linked server-side to the rental context',async()=>{const repo=new MemoryRepository(seedData('unused'));const rental=repo.data.rentals[0];const customerToken='c'.repeat(64);const digest=await sha256(customerToken);const customerId=crypto.randomUUID();rental.customerId=customerId;repo.data.customerSessions.push({id:digest,customerId,expiresAt:Date.now()+100000});const request=new Request('https://batyeo.test/api/core/ticket',{method:'POST',headers:{origin:'https://batyeo.test','content-type':'application/json','x-batyeo-customer-token':customerToken},body:JSON.stringify({email:'customer@test.fr',subject:'Batterie défectueuse',message:'La batterie ne charge plus correctement.',rentalId:rental.id})});const response=await createApi(repo,{demo:true,allowLegacyCredentials:true}).POST(request,{params:Promise.resolve({path:['ticket']})});assert.equal(response.status,201);const ticket=repo.data.tickets.at(-1)!;assert.equal(ticket.rentalId,rental.id);assert.equal(ticket.stationId,rental.stationId);assert.equal(ticket.batteryId,rental.batteryId);});
 test('Signed Stripe webhook is persisted once and duplicate delivery is acknowledged',async()=>{const repo=new MemoryRepository(seedData('unused'));const secret='whsec_test';const previous=process.env.STRIPE_WEBHOOK_SECRET;process.env.STRIPE_WEBHOOK_SECRET=secret;try{const timestamp=Math.floor(Date.now()/1000);const payload=JSON.stringify({id:'evt_test_1',type:'payment_intent.succeeded',created:timestamp,data:{object:{id:'pi_test'}}});const key=await crypto.subtle.importKey('raw',new TextEncoder().encode(secret),{name:'HMAC',hash:'SHA-256'},false,['sign']);const signed=await crypto.subtle.sign('HMAC',key,new TextEncoder().encode(`${timestamp}.${payload}`));const signature=Array.from(new Uint8Array(signed)).map(value=>value.toString(16).padStart(2,'0')).join('');const api=createApi(repo,{demo:true,allowLegacyCredentials:true});const request=()=>new Request('https://batyeo.test/api/core/stripe/webhook',{method:'POST',headers:{'content-type':'application/json','stripe-signature':`t=${timestamp},v1=${signature}`},body:payload});assert.equal((await api.POST(request(),{params:Promise.resolve({path:['stripe','webhook']})})).status,200);assert.equal((await api.POST(request(),{params:Promise.resolve({path:['stripe','webhook']})})).status,200);assert.equal(repo.data.webhookEvents.length,1);}finally{if(previous===undefined)delete process.env.STRIPE_WEBHOOK_SECRET;else process.env.STRIPE_WEBHOOK_SECRET=previous;}});
 test('Financial and state injection on rental start is rejected before mutation',async()=>{const repo=new MemoryRepository(seedData('unused'));const count=repo.data.rentals.length;for(const field of ['state','amountCents','pricing','depositCents','partnerId']){const response=await call(repo,'start',{stationPublicId:'paris-demo',termsAccepted:true,idempotencyKey:crypto.randomUUID(),[field]:'forged'});assert.equal(response.status,400);}assert.equal(repo.data.rentals.length,count);});
 test('Invariant layer catches money corruption and orphan/cross-tenant data',()=>{for(const corrupt of [(d:Data)=>{d.payments[0].capturedCents=99999;},(d:Data)=>{d.stations[0].partnerId='partner-b';},(d:Data)=>{d.slots[0].batteryId='missing';},(d:Data)=>{d.rentals[0].commissionCents=99;}]){const d=seedData('unused');corrupt(d);assert.throws(()=>validateData(d));}});
+test('Media creation, publish and archive are scoped to the partner’s own stations',async()=>{
+ const {repo,token}=await authenticated('PARTNER_ADMIN');
+ const crossTenant=await call(repo,'media/create',{name:'Pub concurrente',kind:'IMAGE',uri:'https://cdn.test/ad.png',durationMs:5000,targetStationIds:['station-lille']},token);
+ assert.equal(crossTenant.status,404);
+ assert.equal(repo.data.media.length,0);
+ const broadcast=await call(repo,'media/create',{name:'Pub globale',kind:'IMAGE',uri:'https://cdn.test/ad.png',durationMs:5000},token);
+ assert.equal(broadcast.status,400);
+ const created=await call(repo,'media/create',{name:'Pub partenaire',kind:'IMAGE',uri:'https://cdn.test/ad.png',durationMs:5000,targetStationIds:['station-paris']},token);
+ assert.equal(created.status,201);
+ const {media}=await created.json() as {media:{id:string}};
+ const otherUser=repo.data.users.find(u=>u.role==='PARTNER_ADMIN'&&u.partnerId==='partner-b')!;
+ const otherToken=crypto.randomUUID()+crypto.randomUUID();const otherDigest=await sha256(otherToken);
+ repo.data.sessions.push({id:otherDigest,userId:otherUser.id,expiresAt:Date.now()+100000,authVersion:0});
+ assert.equal((await call(repo,'media/publish',{id:media.id},otherToken)).status,404);
+ assert.equal(repo.data.media.find(m=>m.id===media.id)?.status,'DRAFT');
+ assert.equal((await call(repo,'media/publish',{id:media.id},token)).status,200);
+ assert.equal(repo.data.media.find(m=>m.id===media.id)?.status,'PUBLISHED');
+});
 test('Finance-only payment details and commissions are not leaked through rental projections',async()=>{const {repo,token}=await authenticated('SUPPORT');const response=await call(repo,'dashboard',undefined,token);const body=await response.json() as {payments:unknown[];rentals:Record<string,unknown>[]};assert.equal(body.payments.length,0);assert.ok(body.rentals.every(r=>!('payment' in r)&&!('commissionCents' in r)));const id=repo.data.rentals[0].id;const detail=await call(repo,'rentals/'+id,undefined,token);const row=await detail.json() as Record<string,unknown>;assert.equal('payment' in row,false);assert.equal('commissionCents' in row,false);});
 
 test('HTTP enrollment survives API recreation, consumes once and stores only digests',async()=>{

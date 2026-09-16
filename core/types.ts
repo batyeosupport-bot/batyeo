@@ -8,7 +8,7 @@ export interface Partner { id:string; name:string; city:string; commissionBps:nu
 export interface Venue { id:string; partnerId:string; name:string; city:string; address:string; category:string; hours:string; latitude?:number|null; longitude?:number|null; }
 export type FailureMode = 'none'|'ejection'|'timeout'|'payment';
 export interface Station { id:string; publicId:string; venueId:string; partnerId:string; online:boolean; failure:FailureMode; capacity:number; provider?:'mock'|'manufacturer'; providerDeviceId?:string|null; providerStatus?:string|null; providerLastSyncedAt?:number|null; lastSeenAt?:number|null; }
-export interface Battery { id:string; charge:number; status:'AVAILABLE'|'RENTED'|'MAINTENANCE'; }
+export interface Battery { id:string; charge:number; status:'AVAILABLE'|'RENTED'|'MAINTENANCE'|'LOST'; }
 export interface Slot { id:string; stationId:string; batteryId:string|null; position:number; }
 export const PAYMENT_STATES = ['PENDING','AUTHORIZING','AUTHORIZED','CAPTURING','CAPTURED','RELEASING','RELEASED','FAILED','UNKNOWN'] as const;
 export type PaymentState = typeof PAYMENT_STATES[number];
@@ -22,7 +22,9 @@ export interface TermsAcceptance {id:string; rentalId:string; version:string; ac
 export interface SupportTicket {id:string; partnerId:string|null; email:string; subject:string; message:string; status:'OPEN'|'RESOLVED'; createdAt:number; rentalId?:string|null; stationId?:string|null; batteryId?:string|null; paymentId?:string|null;}
 export interface AuditLog {id:string; userId:string; action:string; at:number;}
 export interface Session {id:string; userId:string; expiresAt:number; authVersion?:number;}
-export interface CustomerSession {id:string; expiresAt:number;}
+export interface CustomerSession {id:string; customerId:string; expiresAt:number;}
+/** Short-lived, single-use bridge from a web session to a fresh mobile session — never the session secret itself. */
+export interface CustomerHandoffToken {id:string; customerId:string; createdAt:number; expiresAt:number; usedAt:number|null;}
 export interface WebhookEvent {id:string; source:string; externalId:string; payloadHash:string; payload:unknown; receivedAt:number; processedAt:number|null; status:'RECEIVED'|'UNTRUSTED'|'PROCESSED'|'FAILED'; error:string|null;}
 export type ManufacturerName='BAJIE';
 export interface StationProviderLink {id:string;stationId:string;manufacturer:ManufacturerName;externalId:string;active:boolean;createdAt:number;updatedAt:number;}
@@ -38,6 +40,6 @@ export interface HardwareDiscoveryRecord {id:string;stationId:string;runtimeId:s
 export interface StationCapabilityRecord {id:string;stationId:string;capability:string;status:string;source:string;verifiedAt:number|null;evidence:string|null;version:string|null;}
 export interface PartnerUser {id:string; userId:string; partnerId:string;}
 export interface RateLimit {id:string; count:number; expiresAt:number;}
-export interface Data { users:User[]; partners:Partner[]; venues:Venue[]; stations:Station[]; slots:Slot[]; batteries:Battery[]; rentals:Rental[]; events:RentalEvent[]; payments:Payment[]; pricing:PricingStrategy[]; terms:TermsAcceptance[]; tickets:SupportTicket[]; audits:AuditLog[]; sessions:Session[]; partnerUsers:PartnerUser[]; limits:RateLimit[]; customerSessions:CustomerSession[]; webhookEvents:WebhookEvent[]; stationProviderLinks:StationProviderLink[]; stationProviderSnapshots:StationProviderSnapshot[]; reconciliationRecords:ReconciliationRecord[]; manufacturerSyncRuns:ManufacturerSyncRun[]; runtimeCredentials:RuntimeCredentialRecord[]; runtimeEnrollmentTokens:RuntimeEnrollmentTokenRecord[]; hardwareDiscoveryReports:HardwareDiscoveryRecord[]; stationCapabilities:StationCapabilityRecord[]; media:StationMedia[]; }
-export const emptyData = ():Data => ({users:[],partners:[],venues:[],stations:[],slots:[],batteries:[],rentals:[],events:[],payments:[],pricing:[],terms:[],tickets:[],audits:[],sessions:[],partnerUsers:[],limits:[],customerSessions:[],webhookEvents:[],stationProviderLinks:[],stationProviderSnapshots:[],reconciliationRecords:[],manufacturerSyncRuns:[],runtimeCredentials:[],runtimeEnrollmentTokens:[],hardwareDiscoveryReports:[],stationCapabilities:[],media:[]});
+export interface Data { users:User[]; partners:Partner[]; venues:Venue[]; stations:Station[]; slots:Slot[]; batteries:Battery[]; rentals:Rental[]; events:RentalEvent[]; payments:Payment[]; pricing:PricingStrategy[]; terms:TermsAcceptance[]; tickets:SupportTicket[]; audits:AuditLog[]; sessions:Session[]; partnerUsers:PartnerUser[]; limits:RateLimit[]; customerSessions:CustomerSession[]; customerHandoffTokens:CustomerHandoffToken[]; webhookEvents:WebhookEvent[]; stationProviderLinks:StationProviderLink[]; stationProviderSnapshots:StationProviderSnapshot[]; reconciliationRecords:ReconciliationRecord[]; manufacturerSyncRuns:ManufacturerSyncRun[]; runtimeCredentials:RuntimeCredentialRecord[]; runtimeEnrollmentTokens:RuntimeEnrollmentTokenRecord[]; hardwareDiscoveryReports:HardwareDiscoveryRecord[]; stationCapabilities:StationCapabilityRecord[]; media:StationMedia[]; }
+export const emptyData = ():Data => ({users:[],partners:[],venues:[],stations:[],slots:[],batteries:[],rentals:[],events:[],payments:[],pricing:[],terms:[],tickets:[],audits:[],sessions:[],partnerUsers:[],limits:[],customerSessions:[],customerHandoffTokens:[],webhookEvents:[],stationProviderLinks:[],stationProviderSnapshots:[],reconciliationRecords:[],manufacturerSyncRuns:[],runtimeCredentials:[],runtimeEnrollmentTokens:[],hardwareDiscoveryReports:[],stationCapabilities:[],media:[]});
 export type Actor = {id:string;role:Role;partnerId:string|null};

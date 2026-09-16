@@ -1,4 +1,4 @@
-import {PAYMENT_STATES,type Data} from './types';
+import {PAYMENT_STATES,PHYSICAL_STATES,type Data} from './types';
 import type {PricingStrategy} from './pricing';
 import {calculatePrice,commission} from './pricing';
 import {OPEN_STATES} from './rental';
@@ -41,11 +41,14 @@ export function validateData(d:Data):void {
   ensure(d.stations.some(s=>s.id===r.stationId&&s.partnerId===r.partnerId),'rental tenant');
   ensure(STATES.includes(r.state),'rental state');validatePricing(r.pricing);
   if(r.paymentState)ensure(PAYMENT_STATES.includes(r.paymentState),'rental payment state');
+  if(r.physicalState)ensure(PHYSICAL_STATES.includes(r.physicalState),'rental physical state');
   ensure(integer(r.amountCents)&&r.amountCents<=r.pricing.capCents&&integer(r.commissionCents)&&r.commissionCents<=r.amountCents,'rental amounts');
   ensure(integer(r.simulatedMinutes),'simulated duration');
   ensure(r.batteryId===null||d.batteries.some(b=>b.id===r.batteryId),'orphan rental battery');
   ensure(r.returnStationId===null||d.stations.some(s=>s.id===r.returnStationId),'return station');
-  if(['ACTIVE','OVERDUE','RETURN_PENDING','RETURNED','COMPLETED'].includes(r.state))ensure(r.batteryId&&r.startedAt!==null&&r.deadline===r.startedAt+r.pricing.deadlineHours*3600000,'rental start/deadline');
+  if(['ACTIVE','OVERDUE','RETURN_PENDING','RETURNED','COMPLETED','LOST'].includes(r.state))ensure(r.batteryId&&r.startedAt!==null&&r.deadline===r.startedAt+r.pricing.deadlineHours*3600000,'rental start/deadline');
+  if(r.state==='LOST'){const p=d.payments.find(p=>p.rentalId===r.id);ensure(p?.status==='CAPTURED'&&p.capturedCents===p.authorizedCents,'lost rental deposit fully captured');}
+  if(['ACTIVE','OVERDUE','RETURN_PENDING'].includes(r.state)){const p=d.payments.find(p=>p.rentalId===r.id);if(p)ensure(!['RELEASED','FAILED'].includes(p.status),'deposit released/failed on a rental that is still holding a battery');}
   if(r.state==='COMPLETED'){
    ensure(r.startedAt!==null&&r.returnedAt!==null&&r.returnedAt>=r.startedAt&&r.returnStationId,'completed rental timestamps');
    ensure(r.amountCents===calculatePrice(r.returnedAt!-r.startedAt!+r.simulatedMinutes*60000,r.pricing),'completed price');
@@ -54,7 +57,7 @@ export function validateData(d:Data):void {
   }
  }
  for(const p of d.payments){ensure(d.rentals.some(r=>r.id===p.rentalId),'orphan payment');ensure(PAYMENT_STATES.includes(p.status),'payment state');ensure([p.authorizedCents,p.capturedCents,p.releasedCents].every(n=>integer(n))&&p.capturedCents+p.releasedCents<=p.authorizedCents,'money conservation');if(['CAPTURED','RELEASED'].includes(p.status))ensure(p.capturedCents+p.releasedCents===p.authorizedCents,'settled authorization');if(p.status==='RELEASED')ensure(p.capturedCents===0,'released capture');if(p.requestedCents!==undefined)ensure(integer(p.requestedCents,1),'requested payment amount');}
- for(const b of d.batteries){const slots=d.slots.filter(s=>s.batteryId===b.id);ensure(integer(b.charge)&&b.charge<=100,'battery charge');ensure(b.status==='RENTED'?slots.length===0:slots.length===1,'battery location');if(b.status==='RENTED')ensure(d.rentals.some(r=>r.batteryId===b.id&&OPEN_STATES.includes(r.state)),'rented battery without rental');}
+ for(const b of d.batteries){const slots=d.slots.filter(s=>s.batteryId===b.id);ensure(integer(b.charge)&&b.charge<=100,'battery charge');ensure(b.status==='RENTED'||b.status==='LOST'?slots.length===0:slots.length===1,'battery location');if(b.status==='RENTED')ensure(d.rentals.some(r=>r.batteryId===b.id&&OPEN_STATES.includes(r.state)),'rented battery without rental');if(b.status==='LOST')ensure(d.rentals.some(r=>r.batteryId===b.id&&r.state==='LOST'),'lost battery without rental');}
  for(const e of [...d.events,...d.terms])ensure(d.rentals.some(r=>r.id===e.rentalId),'orphan rental event/terms');
  for(const t of d.tickets){ensure(t.partnerId===null||d.partners.some(p=>p.id===t.partnerId),'ticket tenant');if(t.rentalId)ensure(d.rentals.some(r=>r.id===t.rentalId&&(!t.partnerId||r.partnerId===t.partnerId)),'ticket rental');if(t.stationId)ensure(d.stations.some(s=>s.id===t.stationId),'ticket station');if(t.batteryId)ensure(d.batteries.some(b=>b.id===t.batteryId),'ticket battery');if(t.paymentId)ensure(d.payments.some(p=>p.id===t.paymentId),'ticket payment');}
  for(const s of d.sessions)ensure(d.users.some(u=>u.id===s.userId),'orphan operator session');

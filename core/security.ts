@@ -2,6 +2,8 @@ import type {Actor,Data,User} from './types';
 import {DomainError} from './providers';
 export const SESSION_LIFETIME_MS=8*3_600_000;
 export const CUSTOMER_LIFETIME_MS=7*86_400_000;
+/** A handoff link (web → mobile deep link) is not a session: it must be worthless within minutes. */
+export const CUSTOMER_HANDOFF_LIFETIME_MS=5*60_000;
 const ITERATIONS=100_000; // Worker WebCrypto ceiling; versioned for future upgrades.
 const hex=(buffer:ArrayBuffer)=>Array.from(new Uint8Array(buffer)).map(b=>b.toString(16).padStart(2,'0')).join('');
 export async function sha256(value:string){return hex(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(value)));}
@@ -31,7 +33,12 @@ export function actorForDigest(digest:string|undefined,d:Data,now=Date.now()):Ac
  return actorForUser(d,u);
 }
 export async function actorFor(request:Request,d:Data){const token=cookie(request,'batyeo_session');return actorForDigest(token?await sha256(token):undefined,d);}
-export function requireCustomer(d:Data,digest:string,now=Date.now()){if(!d.customerSessions.some(s=>s.id===digest&&s.expiresAt>now))throw new DomainError('Votre session a expiré. Rechargez la page avant de continuer.',401);}
+/** Resolves a session token digest to the customer's stable identity — never the digest itself, so a session can be rotated (handoff) without changing who owns a rental. */
+export function requireCustomer(d:Data,digest:string,now=Date.now()):string{
+ const session=d.customerSessions.find(s=>s.id===digest&&s.expiresAt>now);
+ if(!session)throw new DomainError('Votre session a expiré. Rechargez la page avant de continuer.',401);
+ return session.customerId;
+}
 export function rateLimit(d:Data,key:string,max:number,now=Date.now()){d.limits=d.limits.filter(x=>x.expiresAt>now);let entry=d.limits.find(x=>x.id===key);if(!entry){entry={id:key,count:0,expiresAt:now+60_000};d.limits.push(entry);}if(entry.count>=max)throw new DomainError('Trop de tentatives. Réessayez dans une minute.',429);entry.count++;}
 export function verifyOrigin(request:Request){
  const origin=request.headers.get('origin');

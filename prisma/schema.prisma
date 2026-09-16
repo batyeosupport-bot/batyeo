@@ -28,6 +28,7 @@ enum RentalState {
   CANCELLED
   EXPIRED
   OVERDUE
+  LOST
   ERROR
 }
 model User {
@@ -236,7 +237,18 @@ model AuditLog {
 
 model CustomerSession {
   id String @id
+  customerId String
   expiresAt DateTime
+  @@index([expiresAt])
+  @@index([customerId])
+}
+/** Short-lived, single-use bridge from a web session to a fresh mobile session — never the session secret itself. */
+model CustomerHandoffToken {
+  id String @id
+  customerId String
+  createdAt DateTime
+  expiresAt DateTime
+  usedAt DateTime?
   @@index([expiresAt])
 }
 model WebhookEvent {

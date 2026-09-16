@@ -26,6 +26,6 @@ export function reconcileSnapshot(input:ReconciliationSnapshot):RentalDiscrepanc
  if(input.rentalState==='COMPLETED'&&input.paymentStatus==='CAPTURED'&&input.capturedCents!==input.amountCents)return 'CAPTURE_AMOUNT_MISMATCH';
  if(input.rentalState==='COMPLETED'&&input.paymentStatus==='CAPTURED'&&input.capturedCents===input.amountCents&&!input.providerEventSeen)return 'PAYMENT_EVENT_MISSING';
  if(input.rentalState==='EJECTION_FAILED'&&['AUTHORIZED','CAPTURING','AUTHORIZING'].includes(input.paymentStatus))return 'AUTHORIZATION_OPEN_AFTER_EJECTION_FAILURE';
- if(input.paymentStatus==='CAPTURED'&&input.rentalState!=='COMPLETED')return 'CAPTURE_WITHOUT_COMPLETED';
+ if(input.paymentStatus==='CAPTURED'&&!['COMPLETED','LOST'].includes(input.rentalState))return 'CAPTURE_WITHOUT_COMPLETED';
  return null;
 }
