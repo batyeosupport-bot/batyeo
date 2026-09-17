@@ -16,7 +16,7 @@ import {checksumConfig} from '../core/runtime-config';
 import {heartbeatHealth} from '../core/heartbeat';
 import {validateTranslations} from '../core/i18n';
 import type {Actor,Data,StationHeartbeatRecord} from '../core/types';
-import {createStation,createVenue,publicQrUrl} from '../core/station-admin';
+import {createStation,createVenue,publicQrUrl,setStripeTerminalLocation} from '../core/station-admin';
 import {createMedia,setMediaStatus} from '../core/media-admin';
 
 const engine=new RentalEngine();
@@ -335,6 +335,17 @@ async function route(request:Request,path:string){
    if(existing)Object.assign(existing,record);else d.displayConfigs.push(record);
    audit(d,current,`Affichage borne mis à jour · ${station.publicId}`);
    return {config:record};
+  }));
+ }
+ if(path==='station/stripe-location'){
+  authorize(actor,'settings');
+  const input=z.object({stationId:id,locationId:z.string().trim().max(255).nullable()}).strict().parse(body);
+  return reply(await write('settings',(d,current)=>{
+   const station=d.stations.find(s=>s.id===input.stationId);if(!station)throw new DomainError('Station introuvable.',404);
+   assertTenant(current,station.partnerId);
+   const updated=setStripeTerminalLocation(d,input.stationId,input.locationId?.trim()||null);
+   audit(d,current,`Location Stripe Terminal assignée · ${station.publicId}`);
+   return {station:updated};
   }));
  }
  if(path==='display/translations'){

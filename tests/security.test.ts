@@ -112,3 +112,22 @@ test('runtime HTTP station access is scoped, rotates once and observes revocatio
  assert.equal((await call(repo,'runtime/rotate',{runtimeId:'reader',expectedVersion:1},token)).status,409);
  await call(repo,'runtime/revoke',{runtimeId:'reader'},token);assert.equal((await read(fresh.credential)).status,401);
 });
+test('station/stripe-location assigns and clears a kiosk\'s Stripe Terminal Location, scoped to the operator\'s tenant',async()=>{
+ const {repo,token}=await authenticated();
+ const station=repo.data.stations[0];
+ const rejected=await call(repo,'station/stripe-location',{stationId:station.id,locationId:'not-a-location-id'},token);
+ assert.equal(rejected.status,400);
+ const assigned=await call(repo,'station/stripe-location',{stationId:station.id,locationId:'tml_ABC123'},token);
+ assert.equal(assigned.status,200);
+ assert.equal(repo.data.stations.find(s=>s.id===station.id)?.stripeTerminalLocationId,'tml_ABC123');
+ const cleared=await call(repo,'station/stripe-location',{stationId:station.id,locationId:null},token);
+ assert.equal(cleared.status,200);
+ assert.equal(repo.data.stations.find(s=>s.id===station.id)?.stripeTerminalLocationId,null);
+});
+test('station/stripe-location is refused for a station outside the operator\'s tenant, and for a non-settings role',async()=>{
+ const {repo,token}=await authenticated('PARTNER_ADMIN');
+ const foreignStation=repo.data.stations.find(s=>s.partnerId!==repo.data.users.find(u=>u.role==='PARTNER_ADMIN')?.partnerId)!;
+ assert.equal((await call(repo,'station/stripe-location',{stationId:foreignStation.id,locationId:'tml_ABC123'},token)).status,404);
+ const {repo:repo2,token:supportToken}=await authenticated('SUPPORT');
+ assert.equal((await call(repo2,'station/stripe-location',{stationId:repo2.data.stations[0].id,locationId:'tml_ABC123'},supportToken)).status,403);
+});

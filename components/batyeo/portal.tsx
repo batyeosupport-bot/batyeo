@@ -88,7 +88,27 @@ function Finance({data,partner,analytics,financialAccess}: {data:Dashboard;partn
 function SupportPanel({data,refresh}: {data:Dashboard;refresh:()=>Promise<void>}){return <section className="panel"><PanelTitle title="Vos demandes" action={<Dialog><DialogTrigger asChild><Button>Nouvelle demande</Button></DialogTrigger><DialogContent><DialogHeader><DialogTitle>Une question pour BATYEO ?</DialogTitle><DialogDescription>Votre demande sera enregistrée dans le portail de démonstration.</DialogDescription></DialogHeader><ContactForm kind="support"/></DialogContent></Dialog>}/><DataTable rows={data.tickets} searchText={t=>t.subject+' '+t.email} columns={[{key:'subject',label:'DEMANDE',render:t=><Dialog><DialogTrigger asChild><button className="row-reference">{t.subject}</button></DialogTrigger><DialogContent><DialogHeader><DialogTitle>{t.subject}</DialogTitle><DialogDescription>{t.email} · {dateTime(t.createdAt)}</DialogDescription></DialogHeader><p>{t.message}</p><Status value={t.status}/></DialogContent></Dialog>},{key:'date',label:'CRÉATION',render:t=>dateTime(t.createdAt),sort:t=>t.createdAt},{key:'status',label:'STATUT',render:t=><Status value={t.status}/>},{key:'action',label:'',render:t=>t.status==='OPEN'?<Button variant="outline" onClick={async()=>{try{await api('resolve-ticket',{id:t.id});await refresh();toast.success('Demande résolue.');}catch(e){toast.error((e as Error).message);}}}>Résoudre</Button>:null}]}/></section>;}
 function SettingsPanel({data,refresh}: {data:Dashboard;refresh:()=>Promise<void>}){const [name,setName]=useState(data.user.name??''),[busy,setBusy]=useState(false);return <section className="panel padded form-panel"><h2>Votre profil.</h2><form className="contact-form" onSubmit={async e=>{e.preventDefault();setBusy(true);try{await api('settings',{name});await refresh();toast.success('Profil enregistré.');}catch(e){toast.error((e as Error).message);}finally{setBusy(false);}}}><label>Nom affiché<Input value={name} minLength={2} maxLength={80} onChange={e=>setName(e.target.value)} required/></label><label>Email<Input value={data.user.email??''} readOnly/></label><label>Rôle<Input value={data.user.role} readOnly/></label><Button className="cta" type="submit" disabled={busy}>{busy&&<Busy/>}Enregistrer</Button></form><div className="info-callout"><ShieldCheck/><p>Les autorisations sont contrôlées par le serveur. Les comptes partenaires ne peuvent consulter que leur périmètre.</p></div></section>;}
 function DisplayConsole({data,refresh}:{data:Dashboard;refresh:()=>Promise<void>}){
- return <><RuntimeFleet data={data} refresh={refresh}/><MediaLibrary data={data} refresh={refresh}/><StationDisplayForm data={data} refresh={refresh}/><TranslationsEditor data={data} refresh={refresh}/></>;
+ return <><RuntimeFleet data={data} refresh={refresh}/><StripeTerminalLocations data={data} refresh={refresh}/><MediaLibrary data={data} refresh={refresh}/><StationDisplayForm data={data} refresh={refresh}/><TranslationsEditor data={data} refresh={refresh}/></>;
+}
+/** Lists every station and lets an operator assign the Stripe Terminal Location its kiosk reader connects to, instead of typing it by hand on the device. */
+function StripeTerminalLocations({data,refresh}:{data:Dashboard;refresh:()=>Promise<void>}){
+ if(!data.stations.length)return null;
+ return <section className="panel"><PanelTitle title="Locations Stripe Terminal" subtitle="Identifiant tml_… assigné à chaque borne pour l’appairage du lecteur de carte"/>
+  <DataTable rows={data.stations} searchText={s=>s.venue.name+' '+s.publicId} placeholder="Rechercher une borne…" columns={[
+   {key:'venue',label:'BORNE',render:s=><div className="table-venue">{s.venue.name}<span>{s.publicId}</span></div>,sort:s=>s.venue.name},
+   {key:'location',label:'LOCATION STRIPE',render:s=><StripeLocationCell station={s} refresh={refresh}/>},
+  ]}/>
+ </section>;
+}
+function StripeLocationCell({station,refresh}:{station:Dashboard['stations'][number];refresh:()=>Promise<void>}){
+ const [value,setValue]=useState(station.stripeTerminalLocationId??'');
+ const [busy,setBusy]=useState(false);
+ const changed=value.trim()!==(station.stripeTerminalLocationId??'');
+ async function save(){setBusy(true);try{
+  await api('station/stripe-location',{stationId:station.id,locationId:value.trim()||null});
+  await refresh();toast.success('Location Stripe assignée.');
+ }catch(e){toast.error(e instanceof Error?e.message:'Assignation impossible.');}finally{setBusy(false);}}
+ return <div style={{display:'flex',gap:8,alignItems:'center'}}><Input value={value} maxLength={255} placeholder="tml_…" onChange={e=>setValue(e.target.value)}/><Button size="sm" variant="outline" disabled={busy||!changed} onClick={()=>void save()}>{busy&&<Busy/>}Assigner</Button></div>;
 }
 /** Live state of the physical fleet: what each station's runtime last reported. */
 function RuntimeFleet({data,refresh}:{data:Dashboard;refresh:()=>Promise<void>}){
