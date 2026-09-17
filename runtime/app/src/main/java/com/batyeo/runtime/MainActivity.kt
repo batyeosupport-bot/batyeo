@@ -1,11 +1,14 @@
 package com.batyeo.runtime
 
+import android.Manifest
 import android.annotation.SuppressLint
+import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.text.InputType
+import android.util.Log
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
@@ -20,8 +23,10 @@ import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
 import java.util.concurrent.Executors
 
 /**
@@ -38,6 +43,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var settings: KioskSettings
     private lateinit var client: CoreClient
     private lateinit var watchdog: Watchdog
+    private lateinit var terminal: TerminalManager
     private lateinit var root: FrameLayout
     private lateinit var webView: WebView
     private lateinit var carousel: MediaCarouselView
@@ -49,6 +55,22 @@ class MainActivity : AppCompatActivity() {
     private var config: KioskConfig? = null
     private var reloadDelayMs = 3_000L
     private val errors = mutableListOf<String>()
+
+    private val requestTerminalPermissions = registerForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { granted ->
+        if (granted.values.all { it }) background.execute { terminal.connectIfConfigured() }
+        else Log.w(TAG, "Terminal permissions refused, card reader stays disconnected: $granted")
+    }
+
+    private fun terminalPermissions(): Array<String> {
+        val permissions = mutableListOf(Manifest.permission.ACCESS_FINE_LOCATION)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            permissions += Manifest.permission.BLUETOOTH_SCAN
+            permissions += Manifest.permission.BLUETOOTH_CONNECT
+        }
+        return permissions.toTypedArray()
+    }
 
     private val openConfigDialog = Runnable { showConfigDialog() }
     private val goIdle = Runnable { showCarousel() }
@@ -77,6 +99,16 @@ class MainActivity : AppCompatActivity() {
             setContentView(buildHardStopView())
             return
         }
+
+        terminal = TerminalManager(application, client, settings).apply {
+            onConnectionFailed = { message ->
+                if (!errors.contains(ERROR_TERMINAL)) errors.add(ERROR_TERMINAL)
+                Log.w(TAG, "Stripe Terminal: $message")
+            }
+            onReaderReady = { errors.remove(ERROR_TERMINAL) }
+            initializeIfNeeded()
+        }
+        requestTerminalPermissions.launch(terminalPermissions())
 
         webView = WebView(this).apply {
             settings.javaScriptEnabled = true
@@ -143,6 +175,7 @@ class MainActivity : AppCompatActivity() {
     override fun onDestroy() {
         handler.removeCallbacksAndMessages(null)
         carousel.stop()
+        if (::terminal.isInitialized) terminal.disconnect()
         background.shutdownNow()
         super.onDestroy()
     }
@@ -261,10 +294,26 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         }
+        val stripeLocationId = EditText(this).apply { hint = "ID Location Stripe (tap_loc_…)"; setText(settings.stripeLocationId()) }
+        val terminalStatus = TextView(this).apply { text = "Lecteur carte : ${terminal.connectionStatus}" }
+        val terminalButton = Button(this).apply {
+            text = "Connecter le lecteur"
+            setOnClickListener {
+                settings.saveStripeLocationId(stripeLocationId.text.toString())
+                terminalStatus.text = "Lecteur carte : connexion en cours…"
+                val missing = terminalPermissions().any {
+                    ContextCompat.checkSelfPermission(this@MainActivity, it) != PackageManager.PERMISSION_GRANTED
+                }
+                if (missing) requestTerminalPermissions.launch(terminalPermissions())
+                else this@MainActivity.background.execute { terminal.connectIfConfigured() }
+                handler.postDelayed({ terminalStatus.text = "Lecteur carte : ${terminal.connectionStatus}" }, 4_000L)
+            }
+        }
         val layout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(48, 24, 48, 0)
             addView(coreUrl); addView(kioskUrl); addView(pairingStatus); addView(pairing); addView(pairButton)
+            addView(terminalStatus); addView(stripeLocationId); addView(terminalButton)
             config?.availableLocales?.takeIf { it.isNotEmpty() }?.let { locales ->
                 addView(TextView(this@MainActivity).apply { text = config?.translate(settings.locale(), "selectLanguage") ?: "Langue" })
                 locales.forEach { option ->
@@ -294,5 +343,7 @@ class MainActivity : AppCompatActivity() {
         const val DEFAULT_REFRESH_MS = 15_000L
         const val MIN_REFRESH_MS = 5_000L
         const val ERROR_DISPLAY = "DISPLAY_LOAD_FAILED"
+        const val ERROR_TERMINAL = "TERMINAL_CONNECT_FAILED"
+        const val TAG = "BatyeoMainActivity"
     }
 }

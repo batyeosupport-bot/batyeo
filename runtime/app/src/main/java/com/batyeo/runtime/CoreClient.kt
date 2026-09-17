@@ -66,6 +66,15 @@ class CoreClient(private val context: Context, private val settings: KioskSettin
         }
     }
 
+    /**
+     * A Stripe Terminal connection token, fetched fresh per reader connection
+     * attempt — it is short-lived and never the account secret, so there is
+     * nothing to cache here the way the display config is cached.
+     */
+    fun fetchTerminalConnectionToken(): String? =
+        request("POST", "runtime/terminal-connection-token", JSONObject())
+            ?.let { runCatching { JSONObject(it).getString("secret") }.getOrNull() }
+
     fun sendHeartbeat(config: KioskConfig?, network: String, uptimeMs: Long, errors: List<String>) {
         val payload = JSONObject()
             .put("runtimeVersion", BuildConfig.VERSION_NAME)

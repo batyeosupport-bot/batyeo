@@ -14,6 +14,19 @@ export class StripePaymentProvider {
 }
 async function defaultTransport(secretKey:string,request:StripeRequest):Promise<StripeIntent>{const encoded=new URLSearchParams();for(const [key,value] of Object.entries(request.body)){if(typeof value==='object'&&value!==null)for(const [nested,nestedValue] of Object.entries(value))encoded.set(`${key}[${nested}]`,String(nestedValue));else encoded.set(key,String(value));}const response=await fetch(`https://api.stripe.com/v1${request.path}`,{method:'POST',headers:{Authorization:`Bearer ${secretKey}`,'Content-Type':'application/x-www-form-urlencoded','Idempotency-Key':request.idempotencyKey},body:encoded});const payload=await response.json() as StripeIntent & {error?:{message?:string}};if(!response.ok)throw new DomainError(payload.error?.message??'Stripe a refusé l’opération.',response.status===402?402:503);return payload;}
 
+/**
+ * A Terminal connection token is how the Stripe Terminal SDK running on the
+ * station authenticates its card reader session — short-lived, requested
+ * fresh per connection attempt, and never the account secret key itself. This
+ * is the only Stripe call the kiosk's own process is allowed to trigger.
+ */
+export async function createTerminalConnectionToken(secretKey:string):Promise<{secret:string}>{
+ if(!secretKey||!secretKey.startsWith('sk_test_'))throw new DomainError('Stripe TEST nécessite une clé sk_test_.',503);
+ const response=await fetch('https://api.stripe.com/v1/terminal/connection_tokens',{method:'POST',headers:{Authorization:`Bearer ${secretKey}`,'Content-Type':'application/x-www-form-urlencoded'}});
+ const payload=await response.json() as {secret?:string;error?:{message?:string}};
+ if(!response.ok||!payload.secret)throw new DomainError(payload.error?.message??'Stripe a refusé la demande de jeton lecteur.',response.status===402?402:503);
+ return {secret:payload.secret};
+}
 export async function verifyStripeSignature(payload:string,header:string,secret:string,now=Math.floor(Date.now()/1000),tolerance=300):Promise<boolean>{const parts=Object.fromEntries(header.split(',').map(part=>part.split('='))) as Record<string,string>;const timestamp=Number(parts.t);const signature=parts.v1;if(!Number.isFinite(timestamp)||!signature||Math.abs(now-timestamp)>tolerance)return false;const key=await crypto.subtle.importKey('raw',new TextEncoder().encode(secret),{name:'HMAC',hash:'SHA-256'},false,['sign']);const digest=await crypto.subtle.sign('HMAC',key,new TextEncoder().encode(`${timestamp}.${payload}`));const expected=Array.from(new Uint8Array(digest)).map(value=>value.toString(16).padStart(2,'0')).join('');if(expected.length!==signature.length)return false;let mismatch=0;for(let i=0;i<expected.length;i++)mismatch|=expected.charCodeAt(i)^signature.charCodeAt(i);return mismatch===0;}
 
 export interface StripeWebhookEvent {id:string;type:string;created:number;data:{object:Record<string,unknown>};}

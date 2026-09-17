@@ -1,5 +1,5 @@
 
-export const RUNTIME_ENDPOINTS=['config/read','heartbeat/write','station/read','provider/status','diagnostics/read'] as const;
+export const RUNTIME_ENDPOINTS=['config/read','heartbeat/write','station/read','provider/status','diagnostics/read','payment/connect'] as const;
 export type RuntimeEndpoint=typeof RUNTIME_ENDPOINTS[number];
 export interface RuntimePrincipal {runtimeId:string;stationId:string;partnerId:string;version:number;revokedAt:number|null;}
 export function authorizeRuntime(principal:RuntimePrincipal|undefined, endpoint:string, stationId:string):RuntimePrincipal {

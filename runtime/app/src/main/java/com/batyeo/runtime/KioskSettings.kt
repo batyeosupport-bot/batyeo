@@ -30,6 +30,9 @@ class KioskSettings(context: Context) {
     fun runtimeToken(): String = prefs.getString(KEY_RUNTIME_TOKEN, "").orEmpty()
     fun locale(): String = prefs.getString(KEY_LOCALE, "").orEmpty()
     fun lastCoreContactAt(): Long = prefs.getLong(KEY_LAST_CONTACT, 0L)
+    /** The Stripe "Location" the BBPOS reader is registered to. Empty means Stripe Terminal stays inert. */
+    fun stripeLocationId(): String = prefs.getString(KEY_STRIPE_LOCATION_ID, "").orEmpty()
+    fun saveStripeLocationId(locationId: String) = prefs.edit().putString(KEY_STRIPE_LOCATION_ID, locationId.trim()).apply()
 
     fun save(coreUrl: String, kioskUrl: String, runtimeId: String, runtimeToken: String) {
         prefs.edit()
@@ -52,6 +55,7 @@ class KioskSettings(context: Context) {
         const val KEY_RUNTIME_TOKEN = "runtime_token"
         const val KEY_LOCALE = "locale"
         const val KEY_LAST_CONTACT = "last_core_contact_at"
+        const val KEY_STRIPE_LOCATION_ID = "stripe_location_id"
         const val TAG = "BatyeoKioskSettings"
 
         fun openEncryptedPrefs(context: Context): SharedPreferences {

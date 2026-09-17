@@ -5,7 +5,7 @@ import type {Repository} from '../core/repository';
 import {actorFor,actorForDigest,actorForUser,cookie,customerToken,setCookie,sha256,createPasswordHash,verifyPassword,rateLimit,verifyOrigin,requireCustomer,SESSION_LIFETIME_MS,CUSTOMER_LIFETIME_MS,CUSTOMER_HANDOFF_LIFETIME_MS} from '../core/security';
 import {RentalEngine,authorize,assertTenant,OPEN_STATES,overdueLossEligible} from '../core/rental';
 import {DomainError,MockBatteryStationProvider} from '../core/providers';
-import {verifyStripeSignature,StripePaymentProvider} from '../core/stripe';
+import {verifyStripeSignature,StripePaymentProvider,createTerminalConnectionToken} from '../core/stripe';
 import {StripeRentalCoordinator} from '../core/stripe-coordinator';
 import {resolvePaymentMode} from '../core/payment-mode';
 import {ManufacturerBatteryStationProvider,ManufacturerHttpClient,reconcileManufacturerStation,resolveManufacturerConfig,validateManufacturerStartup} from '../core/manufacturer';
@@ -64,7 +64,7 @@ async function route(request:Request,path:string){
   const linked=(await repository.read()).stationProviderLinks.some(link=>link.active);if(!linked)return reply({received:true,duplicate:false,trusted:false,reconciliation:'no_linked_station'},202);
   const run=await manufacturerSync.run({trigger:'WEBHOOK'});await repository.transaction(d=>{const event=d.webhookEvents.find(row=>row.source===source&&row.externalId===payloadHash);if(event){event.status=run.status==='FAILED'?'FAILED':'PROCESSED';event.processedAt=Date.now();event.error=run.status==='FAILED'?'La vérification read-only fabricant a échoué.':null;}});return reply({received:true,duplicate:false,trusted:false,reconciliation:run.status},202);
  }
- if(path.startsWith('runtime/')&&['runtime/station','runtime/config','runtime/heartbeat'].includes(path)){
+ if(path.startsWith('runtime/')&&['runtime/station','runtime/config','runtime/heartbeat','runtime/terminal-connection-token'].includes(path)){
   const runtimeId=request.headers.get('x-batyeo-runtime-id');
   const bearer=request.headers.get('authorization')?.match(/^Bearer ([a-zA-Z0-9-]{32,128})$/)?.[1];
   if(!runtimeId||!bearer)throw new DomainError('Credential runtime requis.',401);
@@ -94,6 +94,12 @@ async function route(request:Request,path:string){
     if(index>=0)d.stationHeartbeats[index]=heartbeat;else d.stationHeartbeats.push(heartbeat);
    });
    return reply({accepted:true,health:heartbeatHealth(heartbeat),configVersion:displayConfigFor(data,requested).version,serverTime:Date.now()});
+  }
+  if(request.method==='POST'&&path==='runtime/terminal-connection-token'){
+   authorizeRuntime(credential,'payment/connect',requested);
+   if(paymentMode!=='stripe_test')throw new DomainError('Stripe Terminal non configuré sur ce serveur.',503);
+   const {secret}=await createTerminalConnectionToken(process.env.STRIPE_SECRET_KEY!);
+   return reply({secret});
   }
   throw new DomainError('Route runtime inconnue.',404);
  }
