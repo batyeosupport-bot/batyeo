@@ -1,5 +1,5 @@
 import type {Repository} from './repository';
-import {DomainError,MockBatteryStationProvider,type BatteryStationProvider} from './providers';
+import {DomainError,MockBatteryStationProvider,PhysicalResultUnknownError,type BatteryStationProvider} from './providers';
 import {RentalEngine} from './rental';
 import {transition} from './state-machine';
 import type {Data,Rental} from './types';
@@ -30,6 +30,11 @@ export class StripeRentalCoordinator {
    });
    return active;
   } catch(error) {
+   if(error instanceof PhysicalResultUnknownError){
+    // The eject command was sent but its outcome is unconfirmed: never blind-retry, never release
+    // the authorization on a guess. See docs/RUNBOOK_UNKNOWN_PHYSICAL_RESULT.md.
+    return repository.transaction(d=>this.engine.markEjectionUncertain(d,created.id,error.message,now));
+   }
    const message=error instanceof Error?error.message:'Éjection impossible';
    await repository.transaction(d=>this.engine.failEjection(d,created.id,message,now));
    try {await this.payment.release(intent.id,created.id);return repository.transaction(d=>{this.engine.markPaymentReleased(d,created.id,now);return d.rentals.find(r=>r.id===created.id)!;});}

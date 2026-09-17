@@ -1,5 +1,7 @@
 import type {Data, Payment, Station} from './types';
 export class DomainError extends Error { constructor(message:string, public status=409) { super(message); } }
+/** A physical station provider throws this — instead of a plain DomainError — when a command was sent but its outcome could not be confirmed (e.g. a network timeout after dispatch). It must never be treated as a definite failure: the caller has to stop, mark the rental for manual reconciliation, and never blind-retry. See docs/RUNBOOK_UNKNOWN_PHYSICAL_RESULT.md. */
+export class PhysicalResultUnknownError extends DomainError { constructor(message:string) { super(message,503); } }
 export interface PaymentProvider {
  authorize(data:Data,rentalId:string,cents:number,fail?:boolean):Payment;
  capture(data:Data,rentalId:string,cents:number):Payment;
