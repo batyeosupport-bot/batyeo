@@ -6,6 +6,19 @@ import type {Data,Rental} from './types';
 import type {StripeIntent,StripePaymentProvider} from './stripe';
 
 /**
+ * Route B seam: BatteryStationProvider.ejectBattery() is synchronous and mutates Data directly —
+ * fine for the in-memory mock, but a real manufacturer client is a network call, which this
+ * class's own rule forbids inside a repository transaction. A provider for real hardware
+ * implements this instead: a pure async call with no Data access, returning the battery id (or
+ * throwing DomainError for a confirmed failure, PhysicalResultUnknownError for an unconfirmed
+ * one) exactly like StripePaymentProvider.authorize()/capture() already do for payment. The
+ * coordinator applies the result to Data in a follow-up transaction. Not implemented by anything
+ * yet — no manufacturer ejection endpoint is confirmed (docs/RUNBOOK_UNKNOWN_PHYSICAL_RESULT.md) —
+ * this only defines the contract that implementation will have to satisfy.
+ */
+export interface AsyncBatteryEjector { ejectBatteryAsync(stationId:string):Promise<string>; }
+
+/**
  * Coordinates external Stripe TEST calls around short, atomic domain commits.
  * No network call is made from a repository transaction, so optimistic/serializable
  * retries can never duplicate an authorization or capture. Stripe idempotency keys
@@ -13,7 +26,7 @@ import type {StripeIntent,StripePaymentProvider} from './stripe';
  */
 export class StripeRentalCoordinator {
  private readonly engine:RentalEngine;
- constructor(private readonly payment:Pick<StripePaymentProvider,'authorize'|'capture'|'release'>,private readonly station:BatteryStationProvider=new MockBatteryStationProvider()){this.engine=new RentalEngine(undefined,station);}
+ constructor(private readonly payment:Pick<StripePaymentProvider,'authorize'|'capture'|'release'>,private readonly station:BatteryStationProvider=new MockBatteryStationProvider(),private readonly ejector?:AsyncBatteryEjector){this.engine=new RentalEngine(undefined,station);}
 
  async start(repository:Repository,customerId:string,stationId:string,key:string,now=Date.now()):Promise<Rental>{
   const created=await repository.transaction(d=>this.engine.create(d,customerId,stationId,key,now));
@@ -22,30 +35,62 @@ export class StripeRentalCoordinator {
   try {intent=await this.payment.authorize(created.id,created.pricing.depositCents);}
   catch(error){const message=error instanceof Error?error.message:'Stripe authorization failed';await repository.transaction(d=>this.engine.markPaymentFailed(d,created.id,message,'stripe',now));return (await repository.read()).rentals.find(r=>r.id===created.id)!;}
   await repository.transaction(d=>this.engine.markPaymentAuthorized(d,created.id,created.pricing.depositCents,'stripe',intent.id,now));
-  try {
-   const active=await repository.transaction(d=>{
-    const before=d.rentals.find(r=>r.id===created.id)!;
-    if(before.state==='ACTIVE')return before;
-    const r=this.engine.beginEjection(d,created.id,now);const battery=this.station.ejectBattery(d,stationId);d.events.push({id:crypto.randomUUID(),rentalId:r.id,at:now,type:'BATTERY_EJECTED',detail:`Batterie ${battery} libérée`});return this.engine.activateWithBattery(d,r.id,battery,now);
-   });
-   return active;
-  } catch(error) {
-   if(error instanceof PhysicalResultUnknownError){
-    // The eject command was sent but its outcome is unconfirmed: never blind-retry, never release
-    // the authorization on a guess. See docs/RUNBOOK_UNKNOWN_PHYSICAL_RESULT.md.
-    return repository.transaction(d=>this.engine.markEjectionUncertain(d,created.id,error.message,now));
-   }
-   const message=error instanceof Error?error.message:'Éjection impossible';
-   // failEjection is only committed once the release has actually succeeded: it moves the rental
-   // to the terminal EJECTION_FAILED state, which markPaymentUnknown below cannot recover from.
-   // Failing the rental first and finding out the release itself failed would silently strand a
-   // still-authorized deposit behind a rental that looks fully closed out.
+  if(!this.ejector){
+   // Mock/demo station: ejectBattery() is synchronous and Data-mutating, so begin+eject+activate
+   // stay a single atomic transaction exactly as before — no network call is actually made here.
    try {
-    await this.payment.release(intent.id,created.id);
-    return repository.transaction(d=>{this.engine.failEjection(d,created.id,message,now);this.engine.markPaymentReleased(d,created.id,now);return d.rentals.find(r=>r.id===created.id)!;});
-   }
-   catch(releaseError){const releaseMessage=releaseError instanceof Error?releaseError.message:'Stripe release failed';return repository.transaction(d=>this.engine.markPaymentUnknown(d,created.id,releaseMessage,now));}
+    const active=await repository.transaction(d=>{
+     const before=d.rentals.find(r=>r.id===created.id)!;
+     if(before.state==='ACTIVE')return before;
+     const r=this.engine.beginEjection(d,created.id,now);const battery=this.station.ejectBattery(d,stationId);d.events.push({id:crypto.randomUUID(),rentalId:r.id,at:now,type:'BATTERY_EJECTED',detail:`Batterie ${battery} libérée`});return this.engine.activateWithBattery(d,r.id,battery,now);
+    });
+    return active;
+   } catch(error) {return this.handleEjectionError(repository,created.id,intent.id,error,now);}
   }
+  // A real ejector makes a network call, so beginEjection commits on its own first. If another
+  // concurrent start() (client double-submit) already claimed the ejection, this call backs off
+  // instead of calling beginEjection again — which would throw — or ejecting a second battery.
+  const claim=await repository.transaction(d=>{
+   const before=d.rentals.find(r=>r.id===created.id)!;
+   if(before.state!=='PAYMENT_AUTH')return false;
+   this.engine.beginEjection(d,created.id,now);return true;
+  });
+  if(!claim)return (await repository.read()).rentals.find(r=>r.id===created.id)!;
+  try {
+   const battery=await this.ejector.ejectBatteryAsync(stationId);
+   return await repository.transaction(d=>{
+    const r=d.rentals.find(r=>r.id===created.id)!;
+    // ejectBatteryAsync only names which battery left; it has no Data access to remove it from
+    // its slot itself, so that bookkeeping — exactly what the sync ejectBattery() does as a side
+    // effect — happens here, before activateWithBattery, so nothing else can claim it meanwhile.
+    const slot=d.slots.find(s=>s.stationId===stationId&&s.batteryId===battery);
+    const b=d.batteries.find(b=>b.id===battery);
+    if(!slot||!b||b.status!=='AVAILABLE')throw new DomainError('Batterie confirmée par le fabricant introuvable ou déjà réservée.',409);
+    slot.batteryId=null;b.status='RENTED';
+    d.events.push({id:crypto.randomUUID(),rentalId:r.id,at:now,type:'BATTERY_EJECTED',detail:`Batterie ${battery} libérée`});
+    return this.engine.activateWithBattery(d,r.id,battery,now);
+   });
+  } catch(error) {return this.handleEjectionError(repository,created.id,intent.id,error,now);}
+ }
+
+ /**
+  * failEjection is only committed once the release has actually succeeded: it moves the rental
+  * to the terminal EJECTION_FAILED state, which markPaymentUnknown below cannot recover from.
+  * Failing the rental first and finding out the release itself failed would silently strand a
+  * still-authorized deposit behind a rental that looks fully closed out.
+  */
+ private async handleEjectionError(repository:Repository,rentalId:string,intentId:string,error:unknown,now:number):Promise<Rental>{
+  if(error instanceof PhysicalResultUnknownError){
+   // The eject command was sent but its outcome is unconfirmed: never blind-retry, never release
+   // the authorization on a guess. See docs/RUNBOOK_UNKNOWN_PHYSICAL_RESULT.md.
+   return repository.transaction(d=>this.engine.markEjectionUncertain(d,rentalId,error.message,now));
+  }
+  const message=error instanceof Error?error.message:'Éjection impossible';
+  try {
+   await this.payment.release(intentId,rentalId);
+   return repository.transaction(d=>{this.engine.failEjection(d,rentalId,message,now);this.engine.markPaymentReleased(d,rentalId,now);return d.rentals.find(r=>r.id===rentalId)!;});
+  }
+  catch(releaseError){const releaseMessage=releaseError instanceof Error?releaseError.message:'Stripe release failed';return repository.transaction(d=>this.engine.markPaymentUnknown(d,rentalId,releaseMessage,now));}
  }
 
  async return(repository:Repository,rentalId:string,stationId:string,now=Date.now()):Promise<Rental>{
