@@ -45,9 +45,14 @@ The HTTPS link remains the fallback when the app is not installed. Native POSTs 
 
 ## Stations and notifications
 
-`mobile/stations.ts` reads the same `GET /api/core/public` projection as the
-web and falls back to a sorted list when a map provider is unavailable. Only
-online stations with a free return slot are offered for restitution.
+`App.tsx` reads the same `GET /api/core/public` projection as the web
+(`client.stations()`), then filters and sorts it locally: while a rental is
+active, only online stations with a free return slot are offered for
+restitution. Sorting by distance only applies once the device has shared its
+last known position — the plain list always works without GPS. A native
+`MapView` is available as an alternate view of the same filtered list; unknown
+venue coordinates are excluded from the map rather than plotted at a
+fabricated location.
 
 `mobile/notifications.ts` defines the notification adapter and schedule plan.
 The default adapter is a no-op: no push or local notification is sent until

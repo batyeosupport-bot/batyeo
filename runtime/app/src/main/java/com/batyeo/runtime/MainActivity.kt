@@ -294,7 +294,7 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         }
-        val stripeLocationId = EditText(this).apply { hint = "ID Location Stripe (tap_loc_…)"; setText(settings.stripeLocationId()) }
+        val stripeLocationId = EditText(this).apply { hint = "ID Location Stripe (tml_…)"; setText(settings.stripeLocationId()) }
         val terminalStatus = TextView(this).apply { text = "Lecteur carte : ${terminal.connectionStatus}" }
         val terminalButton = Button(this).apply {
             text = "Connecter le lecteur"
