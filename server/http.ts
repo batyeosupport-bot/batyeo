@@ -14,6 +14,7 @@ import {providerHealth} from '../core/manufacturer-sync';
 import {dashboard,rentalView,customerRentalView,stationViews,stationDisplaySnapshot,displayConfigFor,canViewFinance} from '../core/queries';
 import {checksumConfig} from '../core/runtime-config';
 import {heartbeatHealth} from '../core/heartbeat';
+import {validateTranslations} from '../core/i18n';
 import type {Actor,Data,StationHeartbeatRecord} from '../core/types';
 import {createStation,createVenue,publicQrUrl} from '../core/station-admin';
 import {createMedia,setMediaStatus} from '../core/media-admin';
@@ -314,6 +315,40 @@ async function route(request:Request,path:string){
     for(const stationId of existing.targetStationIds){const station=d.stations.find(s=>s.id===stationId);if(!station)throw new DomainError('Station cible introuvable.',404);assertTenant(current,station.partnerId);}
    }
    const item=setMediaStatus(d,input.id,path==='media/publish'?'PUBLISHED':'ARCHIVED');audit(d,current,`Média ${path==='media/publish'?'publié':'archivé'} · ${item.name}`);return {media:item};
+  }));
+ }
+ if(path==='display/config'){
+  authorize(actor,'settings');
+  const input=z.object({stationId:id,idleContent:z.string().max(2000),supportContact:z.string().max(200),maintenanceBanner:z.string().max(500).nullable(),locale:z.string().min(2).max(20),refreshIntervalMs:z.number().int().min(5000).max(600_000),featureFlags:z.record(z.boolean()).optional()}).strict().parse(body);
+  return reply(await write('settings',(d,current)=>{
+   const station=d.stations.find(s=>s.id===input.stationId);if(!station)throw new DomainError('Station introuvable.',404);
+   assertTenant(current,station.partnerId);
+   const existing=d.displayConfigs.find(row=>row.stationId===input.stationId);
+   // updatedAt is the version runtimes compare against, so it always moves forward.
+   const updatedAt=Math.max(Date.now(),(existing?.updatedAt??0)+1);
+   const record={id:existing?.id??crypto.randomUUID(),stationId:input.stationId,idleContent:input.idleContent,supportContact:input.supportContact,maintenanceBanner:input.maintenanceBanner,locale:input.locale,refreshIntervalMs:input.refreshIntervalMs,featureFlags:input.featureFlags??existing?.featureFlags??{},translations:existing?.translations??null,updatedAt};
+   if(existing)Object.assign(existing,record);else d.displayConfigs.push(record);
+   audit(d,current,`Affichage borne mis à jour · ${station.publicId}`);
+   return {config:record};
+  }));
+ }
+ if(path==='display/translations'){
+  authorize(actor,'settings');
+  const input=z.object({stationIds:z.array(id).min(1).max(200),defaultLocale:z.string().min(2).max(20),available:z.array(z.object({code:z.string().min(1).max(10),label:z.string().min(1).max(60),locale:z.string().min(2).max(20)})).min(1).max(40),strings:z.record(z.record(z.string().max(2000)))}).strict().parse(body);
+  return reply(await write('settings',(d,current)=>{
+   const translations=validateTranslations({defaultLocale:input.defaultLocale,available:input.available,strings:input.strings});
+   const updated:string[]=[];
+   for(const stationId of input.stationIds){
+    const station=d.stations.find(s=>s.id===stationId);if(!station)throw new DomainError('Station introuvable.',404);
+    assertTenant(current,station.partnerId);
+    const existing=d.displayConfigs.find(row=>row.stationId===stationId);
+    const updatedAt=Math.max(Date.now(),(existing?.updatedAt??0)+1);
+    if(existing){existing.translations=translations;existing.updatedAt=updatedAt;}
+    else d.displayConfigs.push({id:crypto.randomUUID(),stationId,idleContent:'',supportContact:'',maintenanceBanner:null,locale:input.defaultLocale,refreshIntervalMs:15_000,featureFlags:{},translations,updatedAt});
+    updated.push(stationId);
+   }
+   audit(d,current,`Traductions publiées · ${updated.length} borne(s)`);
+   return {stations:updated.length,locales:input.available.length};
   }));
  }
  if(path==='manufacturer/sync'){

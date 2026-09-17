@@ -14,6 +14,7 @@ import {Brand,Status,ErrorBox,Loading,Busy,Empty,Picker,DataTable,TextLink,useAp
 import {ContactForm} from './public';
 import {euro} from '@/core/pricing';
 import type {Role} from '@/core/types';
+import {RUNTIME_STRING_KEYS} from '@/core/i18n';
 const navigation=[['overview','Vue d’ensemble',LayoutDashboard],['stations','Stations',Radio],['batteries','Batteries',BatteryCharging],['rentals','Locations',ArrowUpRight],['partners','Partenaires',Users],['payments','Paiements',CreditCard],['finance','Finance',Wallet],['analytics','Statistiques',Activity],['pricing','Tarification',SlidersHorizontal],['support','Assistance',LifeBuoy],['monitoring','Monitoring',Activity],['display','Affichage',Tv],['simulator','Simulateur',FlaskConical],['settings','Paramètres',Settings]] as const;
 const partnerPages=['overview','stations','rentals','analytics','finance','support','settings'];
 export function Login({partner}: {partner:boolean}){
@@ -28,7 +29,7 @@ export function Portal({path}: {path:string}){
  const isPartner=data.user.role.startsWith('PARTNER_');if(isPartner&&!partner)return <div className="portal-loading"><ErrorBox message="Cet espace est réservé aux équipes BATYEO."/><TextLink href="/partner">Ouvrir mon espace partenaire</TextLink></div>;
  const financialAccess=['SUPER_ADMIN','ADMIN','FINANCE','PARTNER_ADMIN'].includes(data.user.role);
  const items=navigation.filter(([key])=>(partner?partnerPages.includes(key):true)&&(!['finance','payments','pricing'].includes(key)||financialAccess));const title=navigation.find(([key])=>key===section)?.[1]??'Détail de location';
- return <SidebarProvider><Sidebar className="portal-sidebar"><SidebarHeader><Brand/><div className="workspace-tag"><span className="workspace-avatar">B</span><div><strong>{partner?'Espace partenaire':'Centre de contrôle'}</strong><span>{partner?data.partners[0]?.name:'BATYEO Admin'}</span></div></div></SidebarHeader><SidebarContent><p className="sidebar-label">{partner?'VOTRE ÉTABLISSEMENT':'VOTRE RÉSEAU'}</p><SidebarMenu>{items.map(([key,label,Icon])=><SidebarMenuItem key={key}><SidebarMenuButton asChild isActive={section===key}><Link href={base+(key==='overview'?'':'/'+key)}><Icon size={18}/><span>{label}</span>{key==='simulator'&&<span className="nav-demo">DÉMO</span>}</Link></SidebarMenuButton></SidebarMenuItem>)}</SidebarMenu></SidebarContent><SidebarFooter><Link className="view-site" href="/">Voir le site public<ArrowUpRight size={15}/></Link><div className="operator"><span className="avatar">{data.user.name?.slice(0,1)}</span><div><strong>{data.user.name}</strong><span>{data.user.role.replace('_',' ')}</span></div><Button size="icon" variant="ghost" aria-label="Se déconnecter" onClick={async()=>{await api('logout',{});router.push(base+'/login');window.location.reload();}}><LogOut size={17}/></Button></div></SidebarFooter></Sidebar><SidebarInset className="portal-main"><header className="portal-header"><div><SidebarTrigger/><span>{partner?'Partner':'Admin'}</span><ChevronRight size={14}/><strong>{title}</strong></div><div><span className="demo-label">DONNÉES DÉMO</span><Button variant="ghost" size="icon" aria-label="Actualiser les données" onClick={refresh}><RefreshCw size={17}/></Button><span className="avatar">{data.user.name?.slice(0,1)}</span></div></header><main className="portal-content">{error&&<ErrorBox message={error} retry={refresh}/>}<div className="portal-page-title"><div><p className="eyebrow">{partner?data.partners[0]?.name:'BATYEO OPERATING SYSTEM'}</p><h1>{title}{section==='overview'?'.':''}</h1><p>{section==='overview'?'Votre activité, au même endroit. Voici où en est le réseau.':section==='simulator'?'Pilotez les scénarios de démonstration, sans station physique.':'Données synchronisées avec BATYEO Core · démonstration'}</p></div>{section==='overview'&&!partner&&<Button asChild className="cta"><Link href="/admin/simulator"><FlaskConical size={17}/>Lancer une simulation</Link></Button>}</div>{['finance','payments','pricing'].includes(section)&&!financialAccess?<ErrorBox message="Accès réservé aux rôles financiers."/>:section==='overview'?<Overview data={data} base={base} partner={partner} financialAccess={financialAccess}/>:section==='rentals'&&path.split('/')[3]?<RentalDetail rental={data.rentals.find(r=>r.id===path.split('/')[3])} base={base}/>:section==='simulator'&&!partner?<Simulator data={data} refresh={refresh}/>:section==='pricing'&&!partner?<PricingEditor data={data} refresh={refresh}/>:section==='settings'?<SettingsPanel data={data} refresh={refresh}/>:section==='support'?<SupportPanel data={data} refresh={refresh}/>:section==='analytics'&&!partner?<AdminAnalytics data={data} financialAccess={financialAccess}/>:section==='analytics'||section==='finance'?<Finance data={data} partner={partner} analytics={section==='analytics'} financialAccess={financialAccess}/>:section==='display'&&!partner?<MediaLibrary data={data} refresh={refresh}/>:<Tables section={section} data={data} base={base} refresh={refresh} financialAccess={financialAccess}/>}</main><footer className="portal-footer"><span>BATYEO Core · Paiements et stations simulés</span><span>Actualisé à {new Date(data.serverTime).toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit',timeZone:'Europe/Paris'})} · Paris</span></footer></SidebarInset><Toaster position="bottom-right" richColors/></SidebarProvider>;
+ return <SidebarProvider><Sidebar className="portal-sidebar"><SidebarHeader><Brand/><div className="workspace-tag"><span className="workspace-avatar">B</span><div><strong>{partner?'Espace partenaire':'Centre de contrôle'}</strong><span>{partner?data.partners[0]?.name:'BATYEO Admin'}</span></div></div></SidebarHeader><SidebarContent><p className="sidebar-label">{partner?'VOTRE ÉTABLISSEMENT':'VOTRE RÉSEAU'}</p><SidebarMenu>{items.map(([key,label,Icon])=><SidebarMenuItem key={key}><SidebarMenuButton asChild isActive={section===key}><Link href={base+(key==='overview'?'':'/'+key)}><Icon size={18}/><span>{label}</span>{key==='simulator'&&<span className="nav-demo">DÉMO</span>}</Link></SidebarMenuButton></SidebarMenuItem>)}</SidebarMenu></SidebarContent><SidebarFooter><Link className="view-site" href="/">Voir le site public<ArrowUpRight size={15}/></Link><div className="operator"><span className="avatar">{data.user.name?.slice(0,1)}</span><div><strong>{data.user.name}</strong><span>{data.user.role.replace('_',' ')}</span></div><Button size="icon" variant="ghost" aria-label="Se déconnecter" onClick={async()=>{await api('logout',{});router.push(base+'/login');window.location.reload();}}><LogOut size={17}/></Button></div></SidebarFooter></Sidebar><SidebarInset className="portal-main"><header className="portal-header"><div><SidebarTrigger/><span>{partner?'Partner':'Admin'}</span><ChevronRight size={14}/><strong>{title}</strong></div><div><span className="demo-label">DONNÉES DÉMO</span><Button variant="ghost" size="icon" aria-label="Actualiser les données" onClick={refresh}><RefreshCw size={17}/></Button><span className="avatar">{data.user.name?.slice(0,1)}</span></div></header><main className="portal-content">{error&&<ErrorBox message={error} retry={refresh}/>}<div className="portal-page-title"><div><p className="eyebrow">{partner?data.partners[0]?.name:'BATYEO OPERATING SYSTEM'}</p><h1>{title}{section==='overview'?'.':''}</h1><p>{section==='overview'?'Votre activité, au même endroit. Voici où en est le réseau.':section==='simulator'?'Pilotez les scénarios de démonstration, sans station physique.':'Données synchronisées avec BATYEO Core · démonstration'}</p></div>{section==='overview'&&!partner&&<Button asChild className="cta"><Link href="/admin/simulator"><FlaskConical size={17}/>Lancer une simulation</Link></Button>}</div>{['finance','payments','pricing'].includes(section)&&!financialAccess?<ErrorBox message="Accès réservé aux rôles financiers."/>:section==='overview'?<Overview data={data} base={base} partner={partner} financialAccess={financialAccess}/>:section==='rentals'&&path.split('/')[3]?<RentalDetail rental={data.rentals.find(r=>r.id===path.split('/')[3])} base={base}/>:section==='simulator'&&!partner?<Simulator data={data} refresh={refresh}/>:section==='pricing'&&!partner?<PricingEditor data={data} refresh={refresh}/>:section==='settings'?<SettingsPanel data={data} refresh={refresh}/>:section==='support'?<SupportPanel data={data} refresh={refresh}/>:section==='analytics'&&!partner?<AdminAnalytics data={data} financialAccess={financialAccess}/>:section==='analytics'||section==='finance'?<Finance data={data} partner={partner} analytics={section==='analytics'} financialAccess={financialAccess}/>:section==='display'&&!partner?<DisplayConsole data={data} refresh={refresh}/>:<Tables section={section} data={data} base={base} refresh={refresh} financialAccess={financialAccess}/>}</main><footer className="portal-footer"><span>BATYEO Core · Paiements et stations simulés</span><span>Actualisé à {new Date(data.serverTime).toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit',timeZone:'Europe/Paris'})} · Paris</span></footer></SidebarInset><Toaster position="bottom-right" richColors/></SidebarProvider>;
 }
 function Overview({data,base,partner,financialAccess}: {data:Dashboard;base:string;partner:boolean;financialAccess:boolean}){
  const today=new Date(data.serverTime).toISOString().slice(0,10),todays=data.rentals.filter(r=>new Date(r.createdAt).toISOString().slice(0,10)===today),active=data.rentals.filter(r=>['ACTIVE','OVERDUE'].includes(r.state)),completed=data.rentals.filter(r=>r.state==='COMPLETED'),revenue=completed.reduce((n,r)=>n+(partner?(r.commissionCents??0):r.amountCents),0),available=data.stations.reduce((n,s)=>n+s.available,0);
@@ -86,3 +87,107 @@ function Finance({data,partner,analytics,financialAccess}: {data:Dashboard;partn
 }
 function SupportPanel({data,refresh}: {data:Dashboard;refresh:()=>Promise<void>}){return <section className="panel"><PanelTitle title="Vos demandes" action={<Dialog><DialogTrigger asChild><Button>Nouvelle demande</Button></DialogTrigger><DialogContent><DialogHeader><DialogTitle>Une question pour BATYEO ?</DialogTitle><DialogDescription>Votre demande sera enregistrée dans le portail de démonstration.</DialogDescription></DialogHeader><ContactForm kind="support"/></DialogContent></Dialog>}/><DataTable rows={data.tickets} searchText={t=>t.subject+' '+t.email} columns={[{key:'subject',label:'DEMANDE',render:t=><Dialog><DialogTrigger asChild><button className="row-reference">{t.subject}</button></DialogTrigger><DialogContent><DialogHeader><DialogTitle>{t.subject}</DialogTitle><DialogDescription>{t.email} · {dateTime(t.createdAt)}</DialogDescription></DialogHeader><p>{t.message}</p><Status value={t.status}/></DialogContent></Dialog>},{key:'date',label:'CRÉATION',render:t=>dateTime(t.createdAt),sort:t=>t.createdAt},{key:'status',label:'STATUT',render:t=><Status value={t.status}/>},{key:'action',label:'',render:t=>t.status==='OPEN'?<Button variant="outline" onClick={async()=>{try{await api('resolve-ticket',{id:t.id});await refresh();toast.success('Demande résolue.');}catch(e){toast.error((e as Error).message);}}}>Résoudre</Button>:null}]}/></section>;}
 function SettingsPanel({data,refresh}: {data:Dashboard;refresh:()=>Promise<void>}){const [name,setName]=useState(data.user.name??''),[busy,setBusy]=useState(false);return <section className="panel padded form-panel"><h2>Votre profil.</h2><form className="contact-form" onSubmit={async e=>{e.preventDefault();setBusy(true);try{await api('settings',{name});await refresh();toast.success('Profil enregistré.');}catch(e){toast.error((e as Error).message);}finally{setBusy(false);}}}><label>Nom affiché<Input value={name} minLength={2} maxLength={80} onChange={e=>setName(e.target.value)} required/></label><label>Email<Input value={data.user.email??''} readOnly/></label><label>Rôle<Input value={data.user.role} readOnly/></label><Button className="cta" type="submit" disabled={busy}>{busy&&<Busy/>}Enregistrer</Button></form><div className="info-callout"><ShieldCheck/><p>Les autorisations sont contrôlées par le serveur. Les comptes partenaires ne peuvent consulter que leur périmètre.</p></div></section>;}
+function DisplayConsole({data,refresh}:{data:Dashboard;refresh:()=>Promise<void>}){
+ return <><RuntimeFleet data={data}/><MediaLibrary data={data} refresh={refresh}/><StationDisplayForm data={data} refresh={refresh}/><TranslationsEditor data={data} refresh={refresh}/></>;
+}
+/** Live state of the physical fleet: what each station's runtime last reported. */
+function RuntimeFleet({data}:{data:Dashboard}){
+ const rows=data.stations.map(s=>({station:s,beat:data.heartbeats.find(h=>h.stationId===s.id)}));
+ const counts={ONLINE:0,DEGRADED:0,OFFLINE:0,UNKNOWN:0} as Record<string,number>;
+ for(const row of rows)counts[row.beat?.health??'UNKNOWN']+=1;
+ return <><div className="metric-grid three">
+  <article className="metric featured"><div><span>Bornes qui répondent</span><Radio size={19}/></div><strong>{counts.ONLINE}</strong><span>sur {rows.length} borne{rows.length>1?'s':''}</span></article>
+  <article className="metric"><div><span>Dégradées</span><Activity size={19}/></div><strong>{counts.DEGRADED}</strong><span>Réseau ou affichage en erreur</span></article>
+  <article className="metric"><div><span>Silencieuses</span><Clock size={19}/></div><strong>{counts.OFFLINE+counts.UNKNOWN}</strong><span>Aucun signal récent</span></article>
+ </div><section className="panel"><PanelTitle title="Parc de bornes" subtitle="Dernier signal envoyé par chaque borne · mis à jour en continu"/>
+  {rows.length?<DataTable rows={rows.map(r=>({...r,id:r.station.id}))} searchText={r=>r.station.venue.name+' '+r.station.publicId} placeholder="Rechercher une borne…" columns={[
+   {key:'venue',label:'BORNE',render:r=><div className="table-venue">{r.station.venue.name}<span>{r.station.publicId}</span></div>,sort:r=>r.station.venue.name},
+   {key:'health',label:'RUNTIME',render:r=><Status value={r.beat?.health==='ONLINE'?'online':r.beat?.health==='DEGRADED'?'HIGH':'offline'}/>},
+   {key:'seen',label:'DERNIER SIGNAL',render:r=>r.beat?dateTime(r.beat.at):'Jamais',sort:r=>r.beat?.at??0},
+   {key:'config',label:'CONFIG',render:r=>r.beat?.configVersion?`v${r.beat.configVersion}`:'—'},
+   {key:'app',label:'VERSION APP',render:r=>r.beat?.runtimeVersion??'—'},
+   {key:'errors',label:'ERREURS',render:r=>r.beat?.errors.length?<span className="small">{r.beat.errors.join(', ')}</span>:'—'},
+  ]}/>:<Empty>Aucune borne enregistrée.</Empty>}
+ </section></>;
+}
+/** Per-station screen settings. Saving bumps the config version the runtimes poll for. */
+function StationDisplayForm({data,refresh}:{data:Dashboard;refresh:()=>Promise<void>}){
+ const [stationId,setStationId]=useState(data.stations[0]?.id??'');
+ const stored=data.displayConfigs.find(c=>c.stationId===stationId);
+ const [draft,setDraft]=useState({idleContent:'',supportContact:'',maintenanceBanner:'',locale:'fr-FR',refreshIntervalMs:'15000'});
+ const [loaded,setLoaded]=useState('');
+ const [busy,setBusy]=useState(false);
+ if(loaded!==stationId){
+  setLoaded(stationId);
+  setDraft({idleContent:stored?.idleContent??'',supportContact:stored?.supportContact??'',maintenanceBanner:stored?.maintenanceBanner??'',locale:stored?.locale??'fr-FR',refreshIntervalMs:String(stored?.refreshIntervalMs??15000)});
+ }
+ async function save(){setBusy(true);try{
+  await api('display/config',{stationId,idleContent:draft.idleContent,supportContact:draft.supportContact,maintenanceBanner:draft.maintenanceBanner.trim()?draft.maintenanceBanner:null,locale:draft.locale,refreshIntervalMs:Number(draft.refreshIntervalMs)});
+  await refresh();toast.success('Configuration envoyée aux bornes.');
+ }catch(e){toast.error(e instanceof Error?e.message:'Enregistrement impossible.');}finally{setBusy(false);}}
+ if(!data.stations.length)return <section className="panel"><PanelTitle title="Écran des bornes"/><Empty>Créez d’abord une station.</Empty></section>;
+ return <section className="panel"><PanelTitle title="Écran des bornes" subtitle="Textes et réglages poussés à la borne · appliqués à sa prochaine synchronisation"/>
+  <label className="field-label">Borne<Picker label="Borne" value={stationId} onChange={setStationId} options={data.stations.map(s=>({value:s.id,label:`${s.venue.name} · ${s.publicId}`}))}/></label>
+  <label className="field-label">Message d’accueil<Input value={draft.idleContent} maxLength={2000} onChange={e=>setDraft({...draft,idleContent:e.target.value})} placeholder="Rechargez votre téléphone en quelques secondes"/></label>
+  <label className="field-label">Contact support affiché<Input value={draft.supportContact} maxLength={200} onChange={e=>setDraft({...draft,supportContact:e.target.value})} placeholder="support@batyeo.fr"/></label>
+  <label className="field-label">Bandeau de maintenance<Input value={draft.maintenanceBanner} maxLength={500} onChange={e=>setDraft({...draft,maintenanceBanner:e.target.value})} placeholder="Laissez vide pour ne rien afficher"/></label>
+  <label className="field-label">Langue par défaut<Input value={draft.locale} maxLength={20} onChange={e=>setDraft({...draft,locale:e.target.value})} placeholder="fr-FR"/></label>
+  <label className="field-label">Intervalle de synchronisation (ms)<Input type="number" min={5000} max={600000} value={draft.refreshIntervalMs} onChange={e=>setDraft({...draft,refreshIntervalMs:e.target.value})}/></label>
+  <p className="small muted">{stored?`Version actuelle : v${stored.updatedAt}`:'Aucune configuration enregistrée : la borne utilise les valeurs par défaut.'}</p>
+  <Button className="cta" disabled={busy||!stationId} onClick={()=>void save()}>{busy&&<Busy/>}Envoyer à la borne</Button>
+ </section>;
+}
+/**
+ * Translation pack editor. RUNTIME_STRING_KEYS is the full screen inventory the
+ * kiosk can render, so the completion counter shows exactly what a language
+ * still owes before it is safe to offer it to customers on a station.
+ */
+function TranslationsEditor({data,refresh}:{data:Dashboard;refresh:()=>Promise<void>}){
+ const existing=data.displayConfigs.find(c=>c.translations)?.translations??null;
+ const [locales,setLocales]=useState<{code:string;label:string;locale:string}[]>(existing?.available.map(l=>({...l}))??[{code:'fr',label:'Français',locale:'fr-FR'}]);
+ const [strings,setStrings]=useState<Record<string,Record<string,string>>>(()=>JSON.parse(JSON.stringify(existing?.strings??{'fr-FR':{}})));
+ const [defaultLocale,setDefaultLocale]=useState(existing?.defaultLocale??'fr-FR');
+ const [active,setActive]=useState(existing?.defaultLocale??'fr-FR');
+ const [onlyMissing,setOnlyMissing]=useState(false);
+ const [targets,setTargets]=useState<string[]>([]);
+ const [busy,setBusy]=useState(false);
+ const [newLocale,setNewLocale]=useState({code:'',label:'',locale:''});
+ const dictionary=strings[active]??{};
+ const translated=RUNTIME_STRING_KEYS.filter(key=>dictionary[key]?.trim()).length;
+ const visibleKeys=RUNTIME_STRING_KEYS.filter(key=>!onlyMissing||!dictionary[key]?.trim());
+ const stations=targets.length?targets:data.stations.map(s=>s.id);
+ function setKey(key:string,value:string){setStrings(previous=>({...previous,[active]:{...(previous[active]??{}),[key]:value}}));}
+ function addLocale(){
+  const entry={code:newLocale.code.trim(),label:newLocale.label.trim(),locale:newLocale.locale.trim()};
+  if(!entry.code||!entry.label||!entry.locale)return;
+  if(locales.some(l=>l.locale===entry.locale)){toast.error('Cette langue existe déjà.');return;}
+  setLocales([...locales,entry]);setStrings({...strings,[entry.locale]:{}});setActive(entry.locale);setNewLocale({code:'',label:'',locale:''});
+ }
+ async function publish(){setBusy(true);try{
+  await api('display/translations',{stationIds:stations,defaultLocale,available:locales,strings});
+  await refresh();toast.success(`Traductions publiées sur ${stations.length} borne${stations.length>1?'s':''}.`);
+ }catch(e){toast.error(e instanceof Error?e.message:'Publication impossible.');}finally{setBusy(false);}}
+ return <section className="panel"><PanelTitle title="Langues de la borne" subtitle={`${RUNTIME_STRING_KEYS.length} textes couvrent tous les écrans : accueil, tarifs, paiement carte, éjection, retour, reçu et erreurs`} action={
+  <Dialog><DialogTrigger asChild><Button variant="outline">Ajouter une langue</Button></DialogTrigger><DialogContent>
+   <DialogHeader><DialogTitle>Nouvelle langue</DialogTitle><DialogDescription>La borne proposera cette langue aux clients une fois les textes publiés.</DialogDescription></DialogHeader>
+   <label className="field-label">Code<Input value={newLocale.code} maxLength={10} onChange={e=>setNewLocale({...newLocale,code:e.target.value})} placeholder="en"/></label>
+   <label className="field-label">Nom affiché<Input value={newLocale.label} maxLength={60} onChange={e=>setNewLocale({...newLocale,label:e.target.value})} placeholder="English"/></label>
+   <label className="field-label">Locale complète<Input value={newLocale.locale} maxLength={20} onChange={e=>setNewLocale({...newLocale,locale:e.target.value})} placeholder="en-GB"/></label>
+   <Button className="cta" onClick={addLocale}>Ajouter</Button>
+  </DialogContent></Dialog>
+ }/>
+  <div className="filter-row"><Picker label="Langue en cours d’édition" value={active} onChange={setActive} options={locales.map(l=>({value:l.locale,label:l.label}))}/>
+   <Picker label="Langue par défaut" value={defaultLocale} onChange={setDefaultLocale} options={locales.map(l=>({value:l.locale,label:`Défaut : ${l.label}`}))}/></div>
+  <div className="health-row"><span>Avancement de « {locales.find(l=>l.locale===active)?.label??active} »</span>
+   <div className="charge-bar" style={{minWidth:200}}><span style={{width:`${Math.round(translated/RUNTIME_STRING_KEYS.length*100)}%`}}/>{translated} / {RUNTIME_STRING_KEYS.length}</div></div>
+  {active!==defaultLocale&&translated<RUNTIME_STRING_KEYS.length&&<p className="small muted">Les textes manquants s’afficheront dans la langue par défaut, jamais en blanc.</p>}
+  <label className="field-label" style={{flexDirection:'row',alignItems:'center',gap:8}}><Checkbox checked={onlyMissing} onCheckedChange={v=>setOnlyMissing(v===true)}/>N’afficher que les textes manquants</label>
+  <div style={{maxHeight:420,overflowY:'auto',display:'grid',gap:10}}>
+   {visibleKeys.map(key=><label className="field-label" key={key}><span className="small muted">{key}</span>
+    <Input value={dictionary[key]??''} maxLength={2000} onChange={e=>setKey(key,e.target.value)} placeholder={strings[defaultLocale]?.[key]??''}/></label>)}
+   {!visibleKeys.length&&<Empty>Tous les textes de cette langue sont traduits.</Empty>}
+  </div>
+  <label className="field-label">Bornes concernées<Picker label="Bornes concernées" value={targets.length?targets[0]:'all'} onChange={v=>setTargets(v==='all'?[]:[v])} options={[{value:'all',label:`Toutes les bornes (${data.stations.length})`},...data.stations.map(s=>({value:s.id,label:`${s.venue.name} · ${s.publicId}`}))]}/></label>
+  <Button className="cta" disabled={busy||!data.stations.length||!RUNTIME_STRING_KEYS.filter(k=>strings[defaultLocale]?.[k]?.trim()).length} onClick={()=>void publish()}>{busy&&<Busy/>}Publier sur {stations.length} borne{stations.length>1?'s':''}</Button>
+ </section>;
+}
