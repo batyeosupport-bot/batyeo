@@ -37,6 +37,7 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var settings: KioskSettings
     private lateinit var client: CoreClient
+    private lateinit var watchdog: Watchdog
     private lateinit var root: FrameLayout
     private lateinit var webView: WebView
     private lateinit var carousel: MediaCarouselView
@@ -68,8 +69,14 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         settings = KioskSettings(this)
         client = CoreClient(this, settings)
+        watchdog = Watchdog(this)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         applyImmersiveMode()
+
+        if (watchdog.isHardStopped()) {
+            setContentView(buildHardStopView())
+            return
+        }
 
         webView = WebView(this).apply {
             settings.javaScriptEnabled = true
@@ -192,6 +199,39 @@ class MainActivity : AppCompatActivity() {
     private fun loadKioskUrl() {
         val url = settings.kioskUrl().ifEmpty { getString(R.string.default_kiosk_url) }
         webView.loadUrl(url)
+    }
+
+    /**
+     * Shown instead of the kiosk when the restart budget is exhausted — three
+     * crash-restart cycles inside 30 minutes means retrying automatically is
+     * just draining the station, so this is a deliberate stop, not a bug.
+     */
+    private fun buildHardStopView(): View {
+        val message = TextView(this).apply {
+            text = "BATYEO Runtime à l'arrêt\n\n${watchdog.hardStopReason()}\n\n" +
+                "Identifiant : ${settings.runtimeId().ifEmpty { "non appairé" }}"
+            setTextColor(0xFFFFFFFF.toInt())
+            textSize = 18f
+            gravity = Gravity.CENTER
+        }
+        val retry = Button(this).apply {
+            text = "Réinitialiser et relancer"
+            setOnClickListener {
+                watchdog.reset()
+                recreate()
+            }
+        }
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            setBackgroundColor(0xFF19382C.toInt())
+            setPadding(64, 64, 64, 64)
+            addView(message)
+            addView(retry, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+                topMargin = 48
+                gravity = Gravity.CENTER
+            })
+        }
     }
 
     private fun showConfigDialog() {

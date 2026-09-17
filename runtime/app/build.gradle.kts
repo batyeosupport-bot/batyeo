@@ -38,6 +38,8 @@ android {
 dependencies {
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.appcompat:appcompat:1.7.0")
+    // Keystore-backed storage for the runtime credential (KioskSettings).
+    implementation("androidx.security:security-crypto:1.1.0-alpha06")
     // Stripe Terminal SDK (BBPOS WisePOS reader) goes here once we start phase 2 —
     // left out for now so this module stays a minimal, verifiably-buildable kiosk shell.
 }
