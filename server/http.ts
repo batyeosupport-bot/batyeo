@@ -371,6 +371,26 @@ async function route(request:Request,path:string){
   authorize(actor,'operate');if(!manufacturerSync)throw new DomainError('Provider fabricant non configuré.',503);const input=z.object({stationId:id.optional()}).strict().parse(body);if(input.stationId){const target=data.stations.find(row=>row.id===input.stationId);if(!target)throw new DomainError('Station introuvable.',404);assertTenant(actor!,target.partnerId);}
   await write('operate',(d,current)=>{rateLimit(d,`manufacturer-sync-${current.id}`,20);audit(d,current,`Synchronisation fabricant read-only${input.stationId?' · '+input.stationId:''}`);});return reply({run:await manufacturerSync.run({trigger:'MANUAL',requestedBy:actor,stationId:input.stationId})});
  }
+ if(path==='rental/resolve-ejection'){
+  // Manual close-out of a PHYSICAL_UNKNOWN incident (docs/RUNBOOK_UNKNOWN_PHYSICAL_RESULT.md):
+  // an operator has already queried the manufacturer read-only and knows what really happened.
+  authorize(actor,'operate');
+  const input=z.object({rentalId:id,outcome:z.enum(['EJECTED','NOT_EJECTED']),batteryId:id.optional()}).strict().refine(v=>v.outcome!=='EJECTED'||!!v.batteryId,'Identifiant de batterie requis.').parse(body);
+  const target=data.rentals.find(r=>r.id===input.rentalId);if(!target)throw new DomainError('Location introuvable.',404);
+  assertTenant(actor!,target.partnerId);
+  const auditMessage=`Résultat physique réconcilié · ${input.outcome==='EJECTED'?'batterie sortie':'batterie non sortie'} · ${input.rentalId}`;
+  if(stripeCoordinator){
+   await write('operate',(d,current)=>{rateLimit(d,`resolve-ejection-${current.id}`,20);audit(d,current,auditMessage);});
+   const result=input.outcome==='EJECTED'?await stripeCoordinator.resolveEjectionConfirmed(repository,input.rentalId,input.batteryId!):await stripeCoordinator.resolveEjectionFailed(repository,input.rentalId);
+   return reply({rental:rentalView(await repository.read(),result,canViewFinance(actor!))});
+  }
+  const result=await write('operate',(d,current)=>{
+   rateLimit(d,`resolve-ejection-${current.id}`,20);audit(d,current,auditMessage);
+   if(input.outcome==='EJECTED')return engine.resolveEjectionConfirmed(d,input.rentalId,input.batteryId!);
+   engine.resolveEjectionFailed(d,input.rentalId);engine.markPaymentReleased(d,input.rentalId);return d.rentals.find(r=>r.id===input.rentalId)!;
+  });
+  return reply({rental:rentalView(await repository.read(),result,canViewFinance(actor!))});
+ }
 
  if(path==='simulate'){
   authorize(actor,'operate');

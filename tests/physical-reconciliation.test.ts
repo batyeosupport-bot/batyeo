@@ -118,3 +118,90 @@ test('StripeRentalCoordinator.start() routes an unconfirmed ejection to reconcil
  assert.equal(payment?.status,'AUTHORIZED');
  assert.ok(evaluateAlerts(repo.data,1_800_000_001_000).some(a=>a.kind==='PHYSICAL_UNKNOWN'&&a.severity==='CRITICAL'));
 });
+
+function uncertain(now=1_000){
+ const d=seedData('hash');const engine=new RentalEngine();
+ const rental=engine.create(d,'cust','station-paris','key-1');
+ engine.markPaymentAuthorized(d,rental.id,rental.pricing.depositCents);engine.beginEjection(d,rental.id);
+ engine.markEjectionUncertain(d,rental.id,'timeout',now);
+ return {d,engine,rental};
+}
+test('resolveEjectionConfirmed refuses a rental that was never marked uncertain',()=>{
+ const d=seedData('hash');const engine=new RentalEngine();
+ const rental=engine.create(d,'cust','station-paris','key-1');
+ const batteryId=d.batteries.find(b=>b.status==='AVAILABLE')!.id;
+ assert.throws(()=>engine.resolveEjectionConfirmed(d,rental.id,batteryId,2_000),/résultat physique incertain/);
+});
+test('resolveEjectionConfirmed rejects a battery that is not sitting available at the rental\'s own station',()=>{
+ const {d,engine,rental}=uncertain();
+ assert.throws(()=>engine.resolveEjectionConfirmed(d,rental.id,'not-a-real-battery',2_000),/n’est pas disponible/);
+ const otherStationBattery=d.batteries.find(b=>b.status==='AVAILABLE'&&!d.slots.some(s=>s.stationId==='station-paris'&&s.batteryId===b.id));
+ if(otherStationBattery)assert.throws(()=>engine.resolveEjectionConfirmed(d,rental.id,otherStationBattery.id,2_000),/n’est pas disponible/);
+});
+test('resolveEjectionConfirmed moves the battery out of its slot exactly as a normal ejection would, then activates the rental',()=>{
+ const {d,engine,rental}=uncertain();
+ const batteryId=d.batteries.find(b=>b.status==='AVAILABLE'&&d.slots.some(s=>s.stationId==='station-paris'&&s.batteryId===b.id))!.id;
+ const activated=engine.resolveEjectionConfirmed(d,rental.id,batteryId,2_000);
+ assert.equal(activated.state,'ACTIVE');
+ assert.equal(activated.batteryId,batteryId);
+ assert.equal(d.batteries.find(b=>b.id===batteryId)!.status,'RENTED');
+ assert.equal(d.slots.some(s=>s.batteryId===batteryId),false);
+ assert.doesNotThrow(()=>validateData(d));
+});
+test('resolveEjectionConfirmed is not reusable once the incident is already resolved',()=>{
+ const {d,engine,rental}=uncertain();
+ const batteryId=d.batteries.find(b=>b.status==='AVAILABLE')!.id;
+ engine.resolveEjectionConfirmed(d,rental.id,batteryId,2_000);
+ const another=d.batteries.find(b=>b.status==='AVAILABLE')!.id;
+ assert.throws(()=>engine.resolveEjectionConfirmed(d,rental.id,another,3_000),/résultat physique incertain/);
+});
+test('resolveEjectionFailed refuses a rental that was never marked uncertain, and fails a genuinely uncertain one',()=>{
+ const d=seedData('hash');const engine=new RentalEngine();
+ const plain=engine.create(d,'cust','station-paris','key-1');
+ assert.throws(()=>engine.resolveEjectionFailed(d,plain.id,2_000),/résultat physique incertain/);
+ const {engine:engine2,rental,d:d2}=uncertain();
+ const failed=engine2.resolveEjectionFailed(d2,rental.id,2_000);
+ assert.equal(failed.state,'EJECTION_FAILED');
+ engine2.markPaymentReleased(d2,rental.id,2_100);
+ assert.equal(d2.payments.find(p=>p.rentalId===rental.id)?.status,'RELEASED');
+});
+
+test('StripeRentalCoordinator.resolveEjectionConfirmed makes no Stripe call: the deposit was already authorized and untouched',async()=>{
+ const repo=new MemoryRepository(seedData('unused'));
+ const engine=new RentalEngine();
+ const rental=engine.create(repo.data,'cust','station-paris','key-1');
+ engine.markPaymentAuthorized(repo.data,rental.id,rental.pricing.depositCents,'stripe','pi_test_auth');
+ engine.beginEjection(repo.data,rental.id);engine.markEjectionUncertain(repo.data,rental.id,'timeout',1_000);
+ const {stripe,calls}=stripeProvider();
+ const coordinator=new StripeRentalCoordinator(stripe);
+ const batteryId=repo.data.batteries.find(b=>b.status==='AVAILABLE')!.id;
+ const activated=await coordinator.resolveEjectionConfirmed(repo,rental.id,batteryId,2_000);
+ assert.equal(activated.state,'ACTIVE');
+ assert.equal(calls.length,0);
+ assert.equal(repo.data.payments.find(p=>p.rentalId===rental.id)?.status,'AUTHORIZED');
+});
+test('StripeRentalCoordinator.resolveEjectionFailed actually releases the Stripe authorization, not just the local record',async()=>{
+ const repo=new MemoryRepository(seedData('unused'));
+ const engine=new RentalEngine();
+ const rental=engine.create(repo.data,'cust','station-paris','key-1');
+ engine.markPaymentAuthorized(repo.data,rental.id,rental.pricing.depositCents,'stripe','pi_test_auth');
+ engine.beginEjection(repo.data,rental.id);engine.markEjectionUncertain(repo.data,rental.id,'timeout',1_000);
+ const {stripe,calls}=stripeProvider();
+ const coordinator=new StripeRentalCoordinator(stripe);
+ const failed=await coordinator.resolveEjectionFailed(repo,rental.id,2_000);
+ assert.equal(failed.state,'EJECTION_FAILED');
+ assert.equal(repo.data.payments.find(p=>p.rentalId===rental.id)?.status,'RELEASED');
+ assert.ok(calls.some(c=>c.path.includes('/cancel')));
+});
+test('StripeRentalCoordinator.resolveEjectionFailed surfaces ERROR instead of a silent release when Stripe itself fails',async()=>{
+ const repo=new MemoryRepository(seedData('unused'));
+ const engine=new RentalEngine();
+ const rental=engine.create(repo.data,'cust','station-paris','key-1');
+ engine.markPaymentAuthorized(repo.data,rental.id,rental.pricing.depositCents,'stripe','pi_test_auth');
+ engine.beginEjection(repo.data,rental.id);engine.markEjectionUncertain(repo.data,rental.id,'timeout',1_000);
+ const stripe=new StripePaymentProvider('sk_test_fail',async()=>{throw new Error('network down');});
+ const coordinator=new StripeRentalCoordinator(stripe);
+ const result=await coordinator.resolveEjectionFailed(repo,rental.id,2_000);
+ assert.equal(result.state,'ERROR');
+ assert.equal(repo.data.payments.find(p=>p.rentalId===rental.id)?.status,'UNKNOWN');
+});

@@ -36,8 +36,14 @@ export class StripeRentalCoordinator {
     return repository.transaction(d=>this.engine.markEjectionUncertain(d,created.id,error.message,now));
    }
    const message=error instanceof Error?error.message:'Éjection impossible';
-   await repository.transaction(d=>this.engine.failEjection(d,created.id,message,now));
-   try {await this.payment.release(intent.id,created.id);return repository.transaction(d=>{this.engine.markPaymentReleased(d,created.id,now);return d.rentals.find(r=>r.id===created.id)!;});}
+   // failEjection is only committed once the release has actually succeeded: it moves the rental
+   // to the terminal EJECTION_FAILED state, which markPaymentUnknown below cannot recover from.
+   // Failing the rental first and finding out the release itself failed would silently strand a
+   // still-authorized deposit behind a rental that looks fully closed out.
+   try {
+    await this.payment.release(intent.id,created.id);
+    return repository.transaction(d=>{this.engine.failEjection(d,created.id,message,now);this.engine.markPaymentReleased(d,created.id,now);return d.rentals.find(r=>r.id===created.id)!;});
+   }
    catch(releaseError){const releaseMessage=releaseError instanceof Error?releaseError.message:'Stripe release failed';return repository.transaction(d=>this.engine.markPaymentUnknown(d,created.id,releaseMessage,now));}
   }
  }
@@ -64,6 +70,29 @@ export class StripeRentalCoordinator {
   try {intent=await this.payment.capture(payment.providerReference,rental.pricing.depositCents,rentalId);}
   catch(error){const message=error instanceof Error?error.message:'Stripe capture failed';return repository.transaction(d=>this.engine.markPaymentUnknown(d,rentalId,message,now));}
   return repository.transaction(d=>this.engine.markDepositLost(d,rentalId,rental.pricing.depositCents,intent.id,now));
+ }
+
+ /** Manual reconciliation of a PHYSICAL_UNKNOWN incident, confirmed ejected: purely local, no Stripe call needed — the authorization was never touched while uncertain, and stays exactly as it is now that the rental is active again. */
+ async resolveEjectionConfirmed(repository:Repository,rentalId:string,batteryId:string,now=Date.now()):Promise<Rental>{
+  return repository.transaction(d=>this.engine.resolveEjectionConfirmed(d,rentalId,batteryId,now));
+ }
+
+ /**
+  * Manual reconciliation of a PHYSICAL_UNKNOWN incident, confirmed never ejected. The rental is
+  * only failed (terminal EJECTION_FAILED) once the Stripe release has actually succeeded, and both
+  * commit in the same transaction. Failing the rental first and finding out the release itself
+  * failed would strand a still-authorized deposit behind a rental that looks fully closed out —
+  * markPaymentUnknown can still reach ERROR from EJECTING, but never from EJECTION_FAILED.
+  */
+ async resolveEjectionFailed(repository:Repository,rentalId:string,now=Date.now()):Promise<Rental>{
+  const snapshot=await repository.read();const rental=snapshot.rentals.find(r=>r.id===rentalId);if(!rental)throw new DomainError('Location introuvable.',404);
+  if(rental.physicalState!=='UNKNOWN')throw new DomainError('Cette location n’a pas de résultat physique incertain à réconcilier.',409);
+  const payment=snapshot.payments.find(p=>p.rentalId===rentalId);if(!payment?.providerReference)throw new DomainError('Référence Stripe manquante.',503);
+  try {
+   await this.payment.release(payment.providerReference,rentalId);
+   return repository.transaction(d=>{this.engine.resolveEjectionFailed(d,rentalId,now);this.engine.markPaymentReleased(d,rentalId,now);return d.rentals.find(r=>r.id===rentalId)!;});
+  }
+  catch(releaseError){const releaseMessage=releaseError instanceof Error?releaseError.message:'Stripe release failed';return repository.transaction(d=>this.engine.markPaymentUnknown(d,rentalId,releaseMessage,now));}
  }
 
  /** Webhook-safe projection: never regresses a terminal payment or rental state. */
