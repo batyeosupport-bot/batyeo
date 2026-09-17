@@ -16,7 +16,7 @@
       "bundleIdentifier": "com.batyeo.mobile",
       "supportsTablet": true,
       "infoPlist": {
-        "NSCameraUsageDescription": "BATYEO utilise la cam\u00e9ra pour scanner les QR codes des stations.",
+        "NSCameraUsageDescription": "BATYEO utilise la caméra pour scanner les QR codes des stations.",
         "NSLocationWhenInUseUsageDescription": "BATYEO utilise votre position pour afficher les stations proches."
       },
       "buildNumber": "1"
@@ -40,7 +40,7 @@
       [
         "expo-camera",
         {
-          "cameraPermission": "Autoriser BATYEO \u00e0 scanner les QR codes des stations.",
+          "cameraPermission": "Autoriser BATYEO à scanner les QR codes des stations.",
           "recordAudioAndroid": false
         }
       ],
@@ -51,7 +51,9 @@
         {
           "locationWhenInUsePermission": "Votre position permet de classer les stations proches. Vous pouvez aussi utiliser la liste sans GPS."
         }
-      ]
+      ],
+      "./plugins/withFmtConstevalFix.js",
+      "expo-asset"
     ],
     "web": {
       "bundler": "metro",
