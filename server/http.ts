@@ -18,7 +18,6 @@ import {validateTranslations} from '../core/i18n';
 import type {Actor,Data,StationHeartbeatRecord} from '../core/types';
 import {createStation,createVenue,publicQrUrl} from '../core/station-admin';
 import {createMedia,setMediaStatus} from '../core/media-admin';
-import {activePlaylist} from '../core/media';
 
 const engine=new RentalEngine();
 const station=new MockBatteryStationProvider();
