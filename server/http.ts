@@ -11,8 +11,10 @@ import {resolvePaymentMode} from '../core/payment-mode';
 import {ManufacturerBatteryStationProvider,ManufacturerHttpClient,reconcileManufacturerStation,resolveManufacturerConfig,validateManufacturerStartup} from '../core/manufacturer';
 import {ManufacturerSyncService,linkManufacturerStation} from '../core/manufacturer-sync';
 import {providerHealth} from '../core/manufacturer-sync';
-import {dashboard,rentalView,customerRentalView,stationViews,stationDisplaySnapshot,canViewFinance} from '../core/queries';
-import type {Actor,Data} from '../core/types';
+import {dashboard,rentalView,customerRentalView,stationViews,stationDisplaySnapshot,displayConfigFor,canViewFinance} from '../core/queries';
+import {checksumConfig} from '../core/runtime-config';
+import {heartbeatHealth} from '../core/heartbeat';
+import type {Actor,Data,StationHeartbeatRecord} from '../core/types';
 import {createStation,createVenue,publicQrUrl} from '../core/station-admin';
 import {createMedia,setMediaStatus} from '../core/media-admin';
 import {activePlaylist} from '../core/media';
@@ -20,6 +22,8 @@ import {activePlaylist} from '../core/media';
 const engine=new RentalEngine();
 const station=new MockBatteryStationProvider();
 const id=z.string().min(1).max(100);
+/** Telemetry a station runtime reports; `stationId`/`runtimeId`/`at` are taken from the credential and the server clock, never from the body. */
+const heartbeatSchema=z.object({runtimeVersion:z.string().min(1).max(50),configVersion:z.number().int().nonnegative().optional(),network:z.enum(['ONLINE','OFFLINE','DEGRADED']),appUptimeMs:z.number().int().nonnegative(),displayStatus:z.enum(['OK','ERROR','MAINTENANCE']),providerStatus:z.string().max(50).nullable(),lastCoreContactAt:z.number().int().nonnegative().nullable(),freeStorageBytes:z.number().int().nonnegative().nullable().optional(),localErrorCount:z.number().int().nonnegative().optional(),applicationHealth:z.enum(['OK','DEGRADED','ERROR']).optional(),errors:z.array(z.string().max(500)).max(20)});
 const reply=(body:unknown,status=200,headers:Record<string,string>={})=>Response.json(body,{status,headers:{'Cache-Control':'no-store','X-Content-Type-Options':'nosniff',...headers}});
 function audit(d:Data,a:Actor,action:string){d.audits.push({id:crypto.randomUUID(),userId:a.id,action,at:Date.now()});}
 export function createApi(repository:Repository,options:{demo:boolean;allowLegacyCredentials:boolean},dependencies:{stripeProvider?:Pick<StripePaymentProvider,'authorize'|'capture'|'release'>;manufacturerProvider?:Pick<ManufacturerBatteryStationProvider,'getDeviceInfo'|'listDevices'>}={}) {
@@ -59,7 +63,7 @@ async function route(request:Request,path:string){
   const linked=(await repository.read()).stationProviderLinks.some(link=>link.active);if(!linked)return reply({received:true,duplicate:false,trusted:false,reconciliation:'no_linked_station'},202);
   const run=await manufacturerSync.run({trigger:'WEBHOOK'});await repository.transaction(d=>{const event=d.webhookEvents.find(row=>row.source===source&&row.externalId===payloadHash);if(event){event.status=run.status==='FAILED'?'FAILED':'PROCESSED';event.processedAt=Date.now();event.error=run.status==='FAILED'?'La vérification read-only fabricant a échoué.':null;}});return reply({received:true,duplicate:false,trusted:false,reconciliation:run.status},202);
  }
- if(request.method==='GET'&&path==='runtime/station'){
+ if(path.startsWith('runtime/')&&['runtime/station','runtime/config','runtime/heartbeat'].includes(path)){
   const runtimeId=request.headers.get('x-batyeo-runtime-id');
   const bearer=request.headers.get('authorization')?.match(/^Bearer ([a-zA-Z0-9-]{32,128})$/)?.[1];
   if(!runtimeId||!bearer)throw new DomainError('Credential runtime requis.',401);
@@ -68,9 +72,29 @@ async function route(request:Request,path:string){
   if(!credential||credential.revokedAt!==null||!constantTimeEqual(credential.digest,digest))throw new DomainError('Credential runtime refusé.',401);
   const requested=new URL(request.url).searchParams.get('stationId')??credential.stationId;
   if(requested!==credential.stationId)throw new DomainError('Accès station refusé.',403);
-  authorizeRuntime(credential,'station/read',requested);
   if(!data.stations.some(st=>st.id===requested&&st.partnerId===credential.partnerId))throw new DomainError('Station indisponible.',409);
-  return reply({runtimeId,credentialVersion:credential.version,station:stationDisplaySnapshot(data,requested),serverTime:Date.now()});
+  if(request.method==='GET'&&path==='runtime/station'){
+   authorizeRuntime(credential,'station/read',requested);
+   return reply({runtimeId,credentialVersion:credential.version,station:stationDisplaySnapshot(data,requested),serverTime:Date.now()});
+  }
+  if(request.method==='GET'&&path==='runtime/config'){
+   authorizeRuntime(credential,'config/read',requested);
+   const config=displayConfigFor(data,requested);
+   // The runtime validates this checksum before applying, and keeps its
+   // last-known-good config when a payload arrives corrupted or truncated.
+   return reply({runtimeId,credentialVersion:credential.version,envelope:{config,checksum:checksumConfig(config),issuedAt:Date.now()},serverTime:Date.now()});
+  }
+  if(request.method==='POST'&&path==='runtime/heartbeat'){
+   authorizeRuntime(credential,'heartbeat/write',requested);
+   const body=heartbeatSchema.parse(await request.json());
+   const heartbeat:StationHeartbeatRecord={...body,id:`heartbeat-${requested}`,stationId:requested,runtimeId,at:Date.now()};
+   await repository.transaction(d=>{
+    const index=d.stationHeartbeats.findIndex(row=>row.stationId===requested);
+    if(index>=0)d.stationHeartbeats[index]=heartbeat;else d.stationHeartbeats.push(heartbeat);
+   });
+   return reply({accepted:true,health:heartbeatHealth(heartbeat),configVersion:displayConfigFor(data,requested).version,serverTime:Date.now()});
+  }
+  throw new DomainError('Route runtime inconnue.',404);
  }
  if(request.method==='GET'){
   const d=await repository.read();const actor=await actorFor(request,d);

@@ -45,7 +45,8 @@ export class PrismaRepository implements Repository {
    runtimeEnrollmentTokens:runtimeEnrollmentTokens.map(row=>({...row,createdAt:row.createdAt.getTime(),expiresAt:row.expiresAt.getTime(),usedAt:ms(row.usedAt)})),
    hardwareDiscoveryReports:hardwareDiscoveryReports.map(row=>({...row,collectedAt:row.collectedAt.getTime()})),
    stationCapabilities:stationCapabilities.map(row=>({...row,verifiedAt:ms(row.verifiedAt)})),
-   media:media.map(row=>({...row,kind:row.kind as Data['media'][number]['kind'],status:row.status as Data['media'][number]['status'],startsAt:ms(row.startsAt),endsAt:ms(row.endsAt),targetStationIds:row.targetStationIds as unknown as Data['media'][number]['targetStationIds'],createdAt:row.createdAt.getTime()}))
+   media:media.map(row=>({...row,kind:row.kind as Data['media'][number]['kind'],status:row.status as Data['media'][number]['status'],startsAt:ms(row.startsAt),endsAt:ms(row.endsAt),targetStationIds:row.targetStationIds as unknown as Data['media'][number]['targetStationIds'],createdAt:row.createdAt.getTime()})),
+   displayConfigs:[],stationHeartbeats:[]
   };
  }
  async read():Promise<Data>{return this.client.$transaction(tx=>this.load(tx),{isolationLevel:Prisma.TransactionIsolationLevel.RepeatableRead,timeout:30_000});}

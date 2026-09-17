@@ -2,10 +2,27 @@ import type {Actor,Data,Rental} from './types';
 import {authorize,inTenant} from './rental';
 import {calculatePrice} from './pricing';
 import {providerHealth} from './manufacturer-sync';
-import type {StationPublicSnapshot} from './station-runtime';
+import type {StationDisplayConfig,StationPublicSnapshot} from './station-runtime';
+import {activePlaylist} from './media';
 import {evaluateAlerts} from './ops-alerts';
 export function stationViews(d:Data){return d.stations.map(s=>({...s,venue:d.venues.find(v=>v.id===s.venueId)!,available:d.slots.filter(slot=>slot.stationId===s.id&&d.batteries.some(b=>b.id===slot.batteryId&&b.status==='AVAILABLE')).length,freeSlots:d.slots.filter(slot=>slot.stationId===s.id&&!slot.batteryId).length}));}
 export function stationDisplaySnapshot(d:Data,stationId:string):StationPublicSnapshot {const station=stationViews(d).find(row=>row.id===stationId||row.publicId===stationId);if(!station)throw new Error('Station introuvable.');const pricing=d.pricing[0];if(!pricing)throw new Error('Tarification indisponible.');return {stationId:station.id,publicId:station.publicId,venueName:station.venue.name,online:station.online,availableBatteries:station.available,capacity:station.capacity,hourlyCents:pricing.hourlyCents,capCents:pricing.capCents,depositCents:pricing.depositCents,qrTarget:`/rent/${station.publicId}`,providerHealth:providerHealth(d).status};}
+/**
+ * Display configuration served to a station runtime: admin-owned text and flags,
+ * the translation pack, and the media playlist filtered to what is published,
+ * in its scheduling window, and targeted at this station. `version` is the most
+ * recent change timestamp across those inputs, so it only moves forward and a
+ * runtime holding a newer config never downgrades itself.
+ */
+export function displayConfigFor(d:Data,stationId:string):StationDisplayConfig {
+ const station=d.stations.find(row=>row.id===stationId||row.publicId===stationId);if(!station)throw new Error('Station introuvable.');
+ const venue=d.venues.find(row=>row.id===station.venueId);if(!venue)throw new Error('Établissement introuvable.');
+ const stored=d.displayConfigs.find(row=>row.stationId===station.id);
+ const version=Math.max(stored?.updatedAt??0,d.media.reduce((latest,item)=>Math.max(latest,item.updatedAt??item.createdAt),0),1);
+ const issuedAt=Date.now(),checksum=`live-${version}`;
+ const items=activePlaylist({version,items:d.media,issuedAt,checksum},station.id);
+ return {version,venueName:venue.name,locale:stored?.locale??'fr-FR',idleContent:stored?.idleContent??'',supportContact:stored?.supportContact??'',maintenanceBanner:stored?.maintenanceBanner??null,refreshIntervalMs:stored?.refreshIntervalMs??15_000,featureFlags:stored?.featureFlags??{},advertisingSlots:items.map(item=>item.id),playlist:{version,items,issuedAt,checksum},translations:stored?.translations??null};
+}
 export const canViewFinance=(actor:Actor)=>['SUPER_ADMIN','ADMIN','FINANCE','PARTNER_ADMIN'].includes(actor.role);
 export function rentalView(d:Data,r:Rental,financial=true){const elapsedMs=r.startedAt===null?0:Math.max(0,(r.returnedAt??Date.now())-r.startedAt+r.simulatedMinutes*60_000);return {...r,commissionCents:financial?r.commissionCents:undefined,customerId:undefined,idempotencyKey:undefined,elapsedMs,currentCents:r.startedAt===null?0:calculatePrice(elapsedMs,r.pricing),station:stationViews(d).find(s=>s.id===r.stationId),events:d.events.filter(e=>e.rentalId===r.id),payment:financial?d.payments.find(p=>p.rentalId===r.id):undefined};}
 export function customerRentalView(d:Data,r:Rental){const view=rentalView(d,r,false);const payment=d.payments.find(p=>p.rentalId===r.id);return {...view,payment:payment?{authorizedCents:payment.authorizedCents,capturedCents:payment.capturedCents,releasedCents:payment.releasedCents,status:payment.status}:undefined};}

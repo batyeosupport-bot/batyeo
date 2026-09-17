@@ -1,5 +1,6 @@
 import {z} from 'zod';
 import {validatePlaylist, type Playlist} from './media';
+import {validateTranslations} from './i18n';
 import type {StationDisplayConfig} from './station-runtime';
 
 export interface RuntimeConfigEnvelope {
@@ -37,6 +38,7 @@ export function validateRuntimeConfig(config: StationDisplayConfig): StationDisp
   if (!Number.isInteger(config.version) || config.version < 0) throw new Error('Invalid runtime config version.');
   if (!config.venueName || !config.locale || config.refreshIntervalMs < 5_000) throw new Error('Invalid runtime config metadata.');
   if (config.playlist) validatePlaylist(config.playlist as Playlist);
+  if (config.translations) validateTranslations(config.translations);
   return config;
 }
 
