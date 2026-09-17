@@ -197,12 +197,34 @@ class MainActivity : AppCompatActivity() {
     private fun showConfigDialog() {
         val coreUrl = EditText(this).apply { hint = "URL du serveur BATYEO"; setText(settings.coreUrl()); inputType = InputType.TYPE_TEXT_VARIATION_URI }
         val kioskUrl = EditText(this).apply { hint = "URL d'affichage"; setText(settings.kioskUrl().ifEmpty { getString(R.string.default_kiosk_url) }); inputType = InputType.TYPE_TEXT_VARIATION_URI }
-        val runtimeId = EditText(this).apply { hint = "Identifiant runtime"; setText(settings.runtimeId()) }
-        val runtimeToken = EditText(this).apply { hint = "Jeton runtime"; setText(settings.runtimeToken()) }
+        val pairing = EditText(this).apply { hint = "Coller le code d'appairage" }
+        val pairingStatus = TextView(this).apply {
+            text = if (settings.runtimeToken().isNotEmpty()) "Borne appairée (${settings.runtimeId()})" else "Borne non appairée"
+        }
+        val pairButton = Button(this).apply {
+            text = "Appairer cette borne"
+            setOnClickListener {
+                val code = pairing.text.toString()
+                pairingStatus.text = "Appairage en cours…"
+                this@MainActivity.background.execute {
+                    val result = client.enroll(code)
+                    handler.post {
+                        pairingStatus.text = result.fold(
+                            onSuccess = { "Borne appairée · station $it" },
+                            onFailure = { "Échec : ${it.message}" }
+                        )
+                        if (result.isSuccess) {
+                            coreUrl.setText(settings.coreUrl())
+                            handler.post(refreshConfig)
+                        }
+                    }
+                }
+            }
+        }
         val layout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(48, 24, 48, 0)
-            addView(coreUrl); addView(kioskUrl); addView(runtimeId); addView(runtimeToken)
+            addView(coreUrl); addView(kioskUrl); addView(pairingStatus); addView(pairing); addView(pairButton)
             config?.availableLocales?.takeIf { it.isNotEmpty() }?.let { locales ->
                 addView(TextView(this@MainActivity).apply { text = config?.translate(settings.locale(), "selectLanguage") ?: "Langue" })
                 locales.forEach { option ->
@@ -217,7 +239,8 @@ class MainActivity : AppCompatActivity() {
             .setTitle("Configuration de la borne")
             .setView(layout)
             .setPositiveButton("Enregistrer") { _, _ ->
-                settings.save(coreUrl.text.toString(), kioskUrl.text.toString(), runtimeId.text.toString(), runtimeToken.text.toString())
+                // Pairing owns the credential; saving here must never clear it.
+                settings.save(coreUrl.text.toString(), kioskUrl.text.toString(), settings.runtimeId(), settings.runtimeToken())
                 loadKioskUrl()
                 handler.post(refreshConfig)
             }

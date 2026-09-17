@@ -40,6 +40,32 @@ class CoreClient(private val context: Context, private val settings: KioskSettin
         return incoming
     }
 
+    /**
+     * Redeems a one-time pairing code issued by the admin portal, formatted as
+     * `coreUrl|tokenId|token`. The credential comes back exactly once, so it is
+     * persisted before anything else can fail. A fresh runtime id is generated
+     * per attempt because the server refuses to re-enroll an id it already
+     * knows, revoked or not.
+     */
+    fun enroll(pairingCode: String): Result<String> {
+        val parts = pairingCode.trim().split("|")
+        if (parts.size != 3 || parts.any { it.isBlank() }) {
+            return Result.failure(IllegalArgumentException("Code d'appairage invalide."))
+        }
+        val (base, tokenId, token) = parts
+        val runtimeId = "runtime-" + java.util.UUID.randomUUID()
+        val payload = JSONObject().put("tokenId", tokenId).put("token", token).put("runtimeId", runtimeId)
+        val response = post("${base.trimEnd('/')}/runtime/enroll", payload, authenticated = false)
+            ?: return Result.failure(IllegalStateException("Serveur injoignable ou code refusé."))
+        return runCatching {
+            val credential = JSONObject(response).getString("credential")
+            val stationId = JSONObject(response).optString("stationId")
+            settings.save(base, settings.kioskUrl(), runtimeId, credential)
+            settings.markCoreContact()
+            stationId
+        }
+    }
+
     fun sendHeartbeat(config: KioskConfig?, network: String, uptimeMs: Long, errors: List<String>) {
         val payload = JSONObject()
             .put("runtimeVersion", BuildConfig.VERSION_NAME)
@@ -55,17 +81,24 @@ class CoreClient(private val context: Context, private val settings: KioskSettin
 
     private fun request(method: String, path: String, body: JSONObject?): String? {
         val base = settings.coreUrl().trimEnd('/')
-        val runtimeId = settings.runtimeId()
-        val token = settings.runtimeToken()
-        if (base.isEmpty() || runtimeId.isEmpty() || token.isEmpty()) return null
-        return runCatching {
-            val connection = (URL("$base/$path").openConnection() as HttpURLConnection).apply {
+        if (base.isEmpty() || settings.runtimeId().isEmpty() || settings.runtimeToken().isEmpty()) return null
+        return send(method, "$base/$path", body, authenticated = true)
+    }
+
+    private fun post(url: String, body: JSONObject, authenticated: Boolean): String? =
+        send("POST", url, body, authenticated)
+
+    private fun send(method: String, url: String, body: JSONObject?, authenticated: Boolean): String? =
+        runCatching {
+            val connection = (URL(url).openConnection() as HttpURLConnection).apply {
                 requestMethod = method
                 connectTimeout = 10_000
                 readTimeout = 15_000
-                setRequestProperty("Authorization", "Bearer $token")
-                setRequestProperty("X-Batyeo-Runtime-Id", runtimeId)
                 setRequestProperty("Accept", "application/json")
+                if (authenticated) {
+                    setRequestProperty("Authorization", "Bearer ${settings.runtimeToken()}")
+                    setRequestProperty("X-Batyeo-Runtime-Id", settings.runtimeId())
+                }
                 if (body != null) {
                     doOutput = true
                     setRequestProperty("Content-Type", "application/json")
@@ -77,12 +110,11 @@ class CoreClient(private val context: Context, private val settings: KioskSettin
                 ?.bufferedReader()?.use { it.readText() }
             connection.disconnect()
             if (code !in 200..299) {
-                Log.w(TAG, "$method $path failed with HTTP $code: $text")
+                Log.w(TAG, "$method $url failed with HTTP $code: $text")
                 return null
             }
             text
-        }.onFailure { Log.w(TAG, "$method $path unreachable", it) }.getOrNull()
-    }
+        }.onFailure { Log.w(TAG, "$method $url unreachable", it) }.getOrNull()
 
     private companion object { const val TAG = "BatyeoCoreClient" }
 }

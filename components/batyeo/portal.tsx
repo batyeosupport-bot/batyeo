@@ -88,11 +88,11 @@ function Finance({data,partner,analytics,financialAccess}: {data:Dashboard;partn
 function SupportPanel({data,refresh}: {data:Dashboard;refresh:()=>Promise<void>}){return <section className="panel"><PanelTitle title="Vos demandes" action={<Dialog><DialogTrigger asChild><Button>Nouvelle demande</Button></DialogTrigger><DialogContent><DialogHeader><DialogTitle>Une question pour BATYEO ?</DialogTitle><DialogDescription>Votre demande sera enregistrée dans le portail de démonstration.</DialogDescription></DialogHeader><ContactForm kind="support"/></DialogContent></Dialog>}/><DataTable rows={data.tickets} searchText={t=>t.subject+' '+t.email} columns={[{key:'subject',label:'DEMANDE',render:t=><Dialog><DialogTrigger asChild><button className="row-reference">{t.subject}</button></DialogTrigger><DialogContent><DialogHeader><DialogTitle>{t.subject}</DialogTitle><DialogDescription>{t.email} · {dateTime(t.createdAt)}</DialogDescription></DialogHeader><p>{t.message}</p><Status value={t.status}/></DialogContent></Dialog>},{key:'date',label:'CRÉATION',render:t=>dateTime(t.createdAt),sort:t=>t.createdAt},{key:'status',label:'STATUT',render:t=><Status value={t.status}/>},{key:'action',label:'',render:t=>t.status==='OPEN'?<Button variant="outline" onClick={async()=>{try{await api('resolve-ticket',{id:t.id});await refresh();toast.success('Demande résolue.');}catch(e){toast.error((e as Error).message);}}}>Résoudre</Button>:null}]}/></section>;}
 function SettingsPanel({data,refresh}: {data:Dashboard;refresh:()=>Promise<void>}){const [name,setName]=useState(data.user.name??''),[busy,setBusy]=useState(false);return <section className="panel padded form-panel"><h2>Votre profil.</h2><form className="contact-form" onSubmit={async e=>{e.preventDefault();setBusy(true);try{await api('settings',{name});await refresh();toast.success('Profil enregistré.');}catch(e){toast.error((e as Error).message);}finally{setBusy(false);}}}><label>Nom affiché<Input value={name} minLength={2} maxLength={80} onChange={e=>setName(e.target.value)} required/></label><label>Email<Input value={data.user.email??''} readOnly/></label><label>Rôle<Input value={data.user.role} readOnly/></label><Button className="cta" type="submit" disabled={busy}>{busy&&<Busy/>}Enregistrer</Button></form><div className="info-callout"><ShieldCheck/><p>Les autorisations sont contrôlées par le serveur. Les comptes partenaires ne peuvent consulter que leur périmètre.</p></div></section>;}
 function DisplayConsole({data,refresh}:{data:Dashboard;refresh:()=>Promise<void>}){
- return <><RuntimeFleet data={data}/><MediaLibrary data={data} refresh={refresh}/><StationDisplayForm data={data} refresh={refresh}/><TranslationsEditor data={data} refresh={refresh}/></>;
+ return <><RuntimeFleet data={data} refresh={refresh}/><MediaLibrary data={data} refresh={refresh}/><StationDisplayForm data={data} refresh={refresh}/><TranslationsEditor data={data} refresh={refresh}/></>;
 }
 /** Live state of the physical fleet: what each station's runtime last reported. */
-function RuntimeFleet({data}:{data:Dashboard}){
- const rows=data.stations.map(s=>({station:s,beat:data.heartbeats.find(h=>h.stationId===s.id)}));
+function RuntimeFleet({data,refresh}:{data:Dashboard;refresh:()=>Promise<void>}){
+ const rows=data.stations.map(s=>({station:s,beat:data.heartbeats.find(h=>h.stationId===s.id),refresh}));
  const counts={ONLINE:0,DEGRADED:0,OFFLINE:0,UNKNOWN:0} as Record<string,number>;
  for(const row of rows)counts[row.beat?.health??'UNKNOWN']+=1;
  return <><div className="metric-grid three">
@@ -107,6 +107,7 @@ function RuntimeFleet({data}:{data:Dashboard}){
    {key:'config',label:'CONFIG',render:r=>r.beat?.configVersion?`v${r.beat.configVersion}`:'—'},
    {key:'app',label:'VERSION APP',render:r=>r.beat?.runtimeVersion??'—'},
    {key:'errors',label:'ERREURS',render:r=>r.beat?.errors.length?<span className="small">{r.beat.errors.join(', ')}</span>:'—'},
+   {key:'pair',label:'',render:r=><RuntimePairingAction station={r.station} credential={data.runtimeCredentials.find(c=>c.stationId===r.station.id&&c.revokedAt===null)} refresh={r.refresh}/>},
   ]}/>:<Empty>Aucune borne enregistrée.</Empty>}
  </section></>;
 }
@@ -190,4 +191,46 @@ function TranslationsEditor({data,refresh}:{data:Dashboard;refresh:()=>Promise<v
   <label className="field-label">Bornes concernées<Picker label="Bornes concernées" value={targets.length?targets[0]:'all'} onChange={v=>setTargets(v==='all'?[]:[v])} options={[{value:'all',label:`Toutes les bornes (${data.stations.length})`},...data.stations.map(s=>({value:s.id,label:`${s.venue.name} · ${s.publicId}`}))]}/></label>
   <Button className="cta" disabled={busy||!data.stations.length||!RUNTIME_STRING_KEYS.filter(k=>strings[defaultLocale]?.[k]?.trim()).length} onClick={()=>void publish()}>{busy&&<Busy/>}Publier sur {stations.length} borne{stations.length>1?'s':''}</Button>
  </section>;
+}
+/**
+ * Pairing a physical station with its runtime.
+ *
+ * The enrollment token lives for ten minutes and can be redeemed once, so the
+ * pairing string below is shown exactly once and never stored: if it is lost,
+ * the operator issues a new one rather than recovering the old.
+ */
+function RuntimePairingAction({station,credential,refresh}:{station:Dashboard['stations'][number];credential:Dashboard['runtimeCredentials'][number]|undefined;refresh:()=>Promise<void>}){
+ const [pairing,setPairing]=useState('');
+ const [expiresAt,setExpiresAt]=useState(0);
+ const [busy,setBusy]=useState(false);
+ const active=credential&&credential.revokedAt===null;
+ async function issue(){setBusy(true);try{
+  const result=await api<{tokenId:string;token:string;expiresAt:number}>('runtime/enrollment-token',{stationId:station.id});
+  const origin=typeof window!=='undefined'?window.location.origin+'/api/core':'';
+  setPairing(`${origin}|${result.tokenId}|${result.token}`);setExpiresAt(result.expiresAt);
+  toast.success('Code d’appairage généré · valable 10 minutes.');
+ }catch(e){toast.error(e instanceof Error?e.message:'Génération impossible.');}finally{setBusy(false);}}
+ async function act(path:'runtime/revoke'|'runtime/rotate',payload:Record<string,unknown>,success:string){setBusy(true);try{
+  const result=await api<{credential?:string}>(path,payload);
+  if(result.credential)setPairing(result.credential);
+  await refresh();toast.success(success);
+ }catch(e){toast.error(e instanceof Error?e.message:'Action impossible.');}finally{setBusy(false);}}
+ return <Dialog><DialogTrigger asChild><Button variant="outline">{active?'Gérer':'Appairer'}</Button></DialogTrigger><DialogContent>
+  <DialogHeader><DialogTitle>{station.venue.name}</DialogTitle><DialogDescription>{active?`Runtime associé · version ${credential!.version}`:'Aucun runtime associé à cette borne.'}</DialogDescription></DialogHeader>
+  {active?<>
+   <p className="small muted">Identifiant runtime : <code>{credential!.runtimeId}</code></p>
+   <p className="small muted">{credential!.lastUsedAt?`Dernier accès ${dateTime(credential!.lastUsedAt)}`:'Jamais contacté le serveur.'}</p>
+   <div className="sim-buttons">
+    <Button variant="outline" disabled={busy} onClick={()=>void act('runtime/rotate',{runtimeId:credential!.runtimeId,expectedVersion:credential!.version},'Nouveau secret généré.')}>Renouveler le secret</Button>
+    <Button variant="outline" disabled={busy} onClick={()=>void act('runtime/revoke',{runtimeId:credential!.runtimeId},'Runtime révoqué.')}>Révoquer</Button>
+   </div>
+  </>:<>
+   <p className="small muted">Générez un code, puis collez-le dans l’écran de configuration de la borne (appui long de 5 secondes sur l’écran).</p>
+   <Button className="cta" disabled={busy} onClick={()=>void issue()}>{busy&&<Busy/>}Générer un code d’appairage</Button>
+  </>}
+  {pairing&&<>
+   <label className="field-label">Code d’appairage<Input readOnly value={pairing} onFocus={e=>e.currentTarget.select()}/></label>
+   <p className="small muted">{expiresAt?`Expire à ${dateTime(expiresAt)}. `:''}Ce code n’est affiché qu’une fois : s’il est perdu, générez-en un nouveau.</p>
+  </>}
+ </DialogContent></Dialog>;
 }
