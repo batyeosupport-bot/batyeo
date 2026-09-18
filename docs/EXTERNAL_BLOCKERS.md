@@ -96,7 +96,20 @@ Correction 2026-09-18 (plus tard dans la journée) : `server/http.ts` a en fait 
 
 `core/manufacturer.ts` a maintenant `ManufacturerBatteryEjector`, une implémentation concrète d'`AsyncBatteryEjector` (`core/stripe-coordinator.ts`). Le choix du slot/batterie à cibler vient d'une relecture `cabinet/query` fraîche au moment de l'appel (jamais d'un `Data` local potentiellement périmé) : batterie la mieux chargée parmi les slots occupés, puis `operateDevice(operationType:'pop')` sur ce slot précis. Une erreur réseau (timeout/indisponibilité) pendant l'éjection devient un `PhysicalResultUnknownError` plutôt qu'un échec supposé ; une erreur fabricant confirmée (code non nul) reste une vraie erreur.
 
-**Non branché** : rien dans `server/http.ts` ne construit cette classe — `StripeRentalCoordinator` est toujours instancié sans éjecteur, donc aucune location réelle ne peut déclencher une éjection physique, décision délibérée distincte de la simple existence de la classe. Vérifié uniquement par tests unitaires (mocks), jamais contre la borne réelle.
+**Branché le 2026-09-18, verrou fermé** (décision explicite de l'utilisateur, option « finir le travail mais laisser l'interrupteur éteint ») : `server/http.ts` construit désormais `ManufacturerBatteryEjector` et le passe à `StripeRentalCoordinator`, mais **uniquement** si `MANUFACTURER_ALLOW_PHYSICAL_ACTIONS=true`. Ce réglage reste à `false` partout, y compris sur le déploiement Vercel. Aucune commande physique n'a jamais été envoyée à la borne réelle.
+
+Ce que le verrou garantit maintenant, en profondeur plutôt qu'en un seul point :
+
+- `resolveManufacturerConfig` n'accepte que les littéraux `'true'` / `'false'` — une faute de frappe (`'1'`, `'yes'`, `'TRUE'`) échoue au démarrage au lieu d'être interprétée dans un sens ou dans l'autre.
+- `'true'` exige `MANUFACTURER_PROVIDER=bajie` : pas d'actions physiques sans fournisseur réel derrière.
+- `validateManufacturerStartup` refuse `'true'` avec `PAYMENT_PROVIDER=mock`. Raison : `RentalEngine.start()` (chemin mock) éjecte de façon **synchrone dans la transaction** via `MockBatteryStationProvider`, alors qu'un appel fabricant réel est un appel réseau asynchrone. Sur une station liée à du matériel réel, cette combinaison aurait marqué une location `ACTIVE` sur une batterie jamais sortie physiquement. Seul le chemin Stripe possède la couture asynchrone (`AsyncBatteryEjector`).
+- La barrière elle-même est descendue au point exact du danger : `ManufacturerHttpClient.operateDevice()` refuse sans opt-in, tandis que les lectures (`getDeviceInfo`, `listDevices`) restent toujours disponibles. Avant, c'est le client entier qui refusait d'exister, ce qui liait inutilement la surveillance au verrou. Vérifié en réel après le changement : la lecture de `DTA55480` fonctionne toujours (8 slots, 8 batteries) avec le verrou fermé.
+
+**Condition produit avant d'ouvrir le verrou** : le flux de location natif du fabricant est toujours actif sur ce compte. Tant qu'il l'est, leur QR code peut distribuer une batterie sans que BATYEO le sache, et les deux systèmes peuvent promettre la même batterie. L'utilisateur a indiqué le 2026-09-18 qu'il pourrait supprimer l'APK du fabricant sur la borne pour neutraliser ce flux — voir la réserve technique ci-dessous avant de le faire.
+
+### Réserve sur la suppression de l'APK fabricant
+
+Supprimer l'application du fabricant sur la borne désactiverait bien son flux de location natif, mais c'est très probablement **ce même logiciel qui maintient la connexion de la borne au cloud ChargeNow**. Or tout ce que BATYEO fait aujourd'hui passe par ce cloud : la lecture `cabinet/query` (la surveillance qui vient d'être validée) **et** la commande d'éjection `cabinet/operation`. Retirer leur APK couperait donc vraisemblablement les deux d'un coup, et il faudrait alors piloter le matériel en direct depuis `runtime/` (protocole série/USB de la carte), un chantier entièrement différent et bien plus lourd. À vérifier avec Tony avant toute manipulation, plutôt qu'à découvrir sur une borne devenue muette.
 
 ## Bug de parsing corrigé le 2026-09-18 : une vraie erreur fabricant remontait comme "malformée"
 

@@ -6,9 +6,9 @@ import {actorFor,actorForDigest,actorForUser,cookie,customerToken,setCookie,sha2
 import {RentalEngine,authorize,assertTenant,OPEN_STATES,overdueLossEligible} from '../core/rental';
 import {DomainError,MockBatteryStationProvider} from '../core/providers';
 import {verifyStripeSignature,StripePaymentProvider,createTerminalConnectionToken} from '../core/stripe';
-import {StripeRentalCoordinator} from '../core/stripe-coordinator';
+import {StripeRentalCoordinator,type AsyncBatteryEjector} from '../core/stripe-coordinator';
 import {resolvePaymentMode} from '../core/payment-mode';
-import {ManufacturerBatteryStationProvider,ManufacturerHttpClient,reconcileManufacturerStation,resolveManufacturerConfig,validateManufacturerStartup} from '../core/manufacturer';
+import {ManufacturerBatteryEjector,ManufacturerBatteryStationProvider,ManufacturerHttpClient,reconcileManufacturerStation,resolveManufacturerConfig,validateManufacturerStartup} from '../core/manufacturer';
 import {ManufacturerSyncService,linkManufacturerStation} from '../core/manufacturer-sync';
 import {providerHealth} from '../core/manufacturer-sync';
 import {dashboard,rentalView,customerRentalView,stationViews,stationDisplaySnapshot,displayConfigFor,canViewFinance} from '../core/queries';
@@ -26,11 +26,15 @@ const id=z.string().min(1).max(100);
 const heartbeatSchema=z.object({runtimeVersion:z.string().min(1).max(50),configVersion:z.number().int().nonnegative().optional(),network:z.enum(['ONLINE','OFFLINE','DEGRADED']),appUptimeMs:z.number().int().nonnegative(),displayStatus:z.enum(['OK','ERROR','MAINTENANCE']),providerStatus:z.string().max(50).nullable(),lastCoreContactAt:z.number().int().nonnegative().nullable(),freeStorageBytes:z.number().int().nonnegative().nullable().optional(),localErrorCount:z.number().int().nonnegative().optional(),applicationHealth:z.enum(['OK','DEGRADED','ERROR']).optional(),errors:z.array(z.string().max(500)).max(20)});
 const reply=(body:unknown,status=200,headers:Record<string,string>={})=>Response.json(body,{status,headers:{'Cache-Control':'no-store','X-Content-Type-Options':'nosniff',...headers}});
 function audit(d:Data,a:Actor,action:string){d.audits.push({id:crypto.randomUUID(),userId:a.id,action,at:Date.now()});}
-export function createApi(repository:Repository,options:{demo:boolean;allowLegacyCredentials:boolean},dependencies:{stripeProvider?:Pick<StripePaymentProvider,'authorize'|'capture'|'release'>;manufacturerProvider?:Pick<ManufacturerBatteryStationProvider,'getDeviceInfo'|'listDevices'>}={}) {
+export function createApi(repository:Repository,options:{demo:boolean;allowLegacyCredentials:boolean},dependencies:{stripeProvider?:Pick<StripePaymentProvider,'authorize'|'capture'|'release'>;manufacturerProvider?:Pick<ManufacturerBatteryStationProvider,'getDeviceInfo'|'listDevices'>;batteryEjector?:AsyncBatteryEjector}={}) {
  const runtimeEnv=typeof process!=='undefined'?process.env:{};const paymentMode=resolvePaymentMode(runtimeEnv);validateManufacturerStartup(runtimeEnv);
- const stripeCoordinator=paymentMode==='stripe_test'?new StripeRentalCoordinator(dependencies.stripeProvider??new StripePaymentProvider(process.env.STRIPE_SECRET_KEY!),station):undefined;
- const manufacturerConfig=resolveManufacturerConfig(runtimeEnv);const manufacturerProvider=dependencies.manufacturerProvider??(manufacturerConfig?new ManufacturerBatteryStationProvider(new ManufacturerHttpClient(manufacturerConfig)):undefined);
+ const manufacturerConfig=resolveManufacturerConfig(runtimeEnv);const manufacturerClient=manufacturerConfig?new ManufacturerHttpClient(manufacturerConfig):undefined;
+ const manufacturerProvider=dependencies.manufacturerProvider??(manufacturerClient?new ManufacturerBatteryStationProvider(manufacturerClient):undefined);
  const manufacturerSync=manufacturerProvider?new ManufacturerSyncService(repository,manufacturerProvider):undefined;
+ // Only ever constructed on an explicit opt-in that validateManufacturerStartup has already found
+ // coherent; without it the coordinator keeps its mock path and no rental can move real hardware.
+ const batteryEjector=dependencies.batteryEjector??(manufacturerClient&&manufacturerConfig?.allowPhysicalActions?new ManufacturerBatteryEjector(manufacturerClient,repository):undefined);
+ const stripeCoordinator=paymentMode==='stripe_test'?new StripeRentalCoordinator(dependencies.stripeProvider??new StripePaymentProvider(process.env.STRIPE_SECRET_KEY!),station,batteryEjector):undefined;
 async function route(request:Request,path:string){
  if(request.method==='POST'&&path==='internal/manufacturer/sync'){
   const expected=typeof process!=='undefined'?process.env.MANUFACTURER_SYNC_SECRET:undefined,provided=request.headers.get('authorization')?.replace(/^Bearer /,'');if(!expected||!provided||(await sha256(expected))!==(await sha256(provided)))throw new DomainError('Job de synchronisation non autorisé.',401);if(!manufacturerSync)throw new DomainError('Provider fabricant non configuré.',503);return reply({run:await manufacturerSync.run({trigger:'SCHEDULED'})});

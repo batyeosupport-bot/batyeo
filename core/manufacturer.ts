@@ -2,6 +2,7 @@ import {z} from 'zod';
 import type {Data,Station} from './types';
 import type {BatteryStationProvider} from './providers';
 import {DomainError,PhysicalResultUnknownError} from './providers';
+import {resolvePaymentMode} from './payment-mode';
 import type {Repository} from './repository';
 
 export const MANUFACTURER_DEFAULT_BASE_URL='https://developer.chargenow.top/cdb-open-api/v1';
@@ -18,7 +19,7 @@ export class ManufacturerApiError extends ManufacturerError {constructor(public 
 export interface ManufacturerLog {level:'info'|'warn'|'error';event:string;path:string;status?:number;providerCode?:number;}
 export type ManufacturerLogger=(entry:ManufacturerLog)=>void;
 export type ManufacturerTransport=(url:string,init:RequestInit)=>Promise<Response>;
-export interface ManufacturerConfig {baseUrl:string;username:string;password:string;timeoutMs?:number;allowPhysicalActions?:false;}
+export interface ManufacturerConfig {baseUrl:string;username:string;password:string;timeoutMs?:number;allowPhysicalActions?:boolean;}
 export type ManufacturerEndpointAuth=(path:string)=>Record<string,string>;
 export interface ManufacturerDeviceQuery {deviceId:string;}
 export interface ManufacturerListQuery {coordType:string;zoomLevel:number;lat:number;lng:number;showPrice:boolean;}
@@ -61,8 +62,11 @@ export class ManufacturerHttpClient {
  private readonly baseUrl:string;
  private readonly timeoutMs:number;
  private readonly endpointAuth:ManufacturerEndpointAuth;
+ private readonly allowPhysicalActions:boolean;
  constructor(config:ManufacturerConfig,private readonly transport:ManufacturerTransport=(url,init)=>fetch(url,init),private readonly logger:ManufacturerLogger=()=>{},endpointAuth?:ManufacturerEndpointAuth){
-  if(config.allowPhysicalActions!==undefined&&config.allowPhysicalActions!==false)throw new ManufacturerError('Les actions physiques fabricant sont désactivées.',503,'PHYSICAL_BLOCKED');
+  // The gate sits on operateDevice() itself rather than on the whole client: reads stay available
+  // even when physical actions are off, so monitoring and reconciliation never depend on it.
+  this.allowPhysicalActions=config.allowPhysicalActions===true;
   if(!config.username||!config.password)throw new ManufacturerError('Identifiants fabricant manquants.',503,'AUTH');
   const base=new URL(config.baseUrl);if(base.protocol!=='https:'||base.username||base.password)throw new ManufacturerError('L’API fabricant doit utiliser une URL HTTPS sans identifiants.',503,'AUTH');
   this.baseUrl=base.toString().replace(/\/$/,'');this.timeoutMs=config.timeoutMs??8_000;
@@ -71,13 +75,14 @@ export class ManufacturerHttpClient {
  async getDeviceInfo(query:ManufacturerDeviceQuery){const raw=await this.request('GET',MANUFACTURER_DEVICE_INFO_PATH,{deviceId:query.deviceId});const envelope=parseResponse(envelopeSchema,raw);this.throwProviderError(envelope.code,envelope.msg,MANUFACTURER_DEVICE_INFO_PATH);const payload=parseResponse(deviceResponseSchema,raw);return mapDevice(query.deviceId,payload.data);}
  async listDevices(query:ManufacturerListQuery){const raw=await this.request('POST',MANUFACTURER_DEVICE_LIST_PATH,{coordType:query.coordType,zoomLevel:String(query.zoomLevel),lat:String(query.lat),lng:String(query.lng),showPrice:String(query.showPrice)});const envelope=parseResponse(envelopeSchema,raw);this.throwProviderError(envelope.code,envelope.msg,MANUFACTURER_DEVICE_LIST_PATH);const payload=parseResponse(listResponseSchema,raw);return payload.list.map(item=>({shopId:item.shop.id,name:item.shop.shopName,address:item.shop.shopAddress,latitude:finite(item.shop.latitude,'latitude'),longitude:finite(item.shop.longitude,'longitude'),batteryCount:count(item.cabinet.batteryNum,'batteryNum'),freeCount:count(item.cabinet.freeNum,'freeNum'),informationStatus:item.cabinet.infoStatus}));}
  /**
-  * Confirmed endpoint (docs/EXTERNAL_BLOCKERS.md), not yet called from anywhere in server/ or
-  * core/stripe-coordinator.ts. operationType 'pop' is a real physical action — this method alone
-  * does not bypass MANUFACTURER_ALLOW_PHYSICAL_ACTIONS, which still has to stay false everywhere
-  * that actually drives a rental. Kept close to the documented shape rather than only exposing
-  * 'pop': lock/unlock/restart are the same call and just as undecided about who's allowed to use them.
+  * Confirmed endpoint (docs/EXTERNAL_BLOCKERS.md). Every operationType here moves real hardware,
+  * so this is the single choke point for physical actions: it refuses unless the operator opted in
+  * through MANUFACTURER_ALLOW_PHYSICAL_ACTIONS=true, which resolveManufacturerConfig() only accepts
+  * alongside a coherent rental path (see validateManufacturerStartup). Kept close to the documented
+  * shape rather than only exposing 'pop': lock/unlock/restart are the same call behind the same gate.
   */
  async operateDevice(query:ManufacturerOperationQuery):Promise<ManufacturerOperationResult>{
+  if(!this.allowPhysicalActions){this.logger({level:'warn',event:'manufacturer_physical_blocked',path:MANUFACTURER_DEVICE_OPERATION_PATH});throw new ManufacturerError('Action physique fabricant désactivée (MANUFACTURER_ALLOW_PHYSICAL_ACTIONS).',403,'PHYSICAL_BLOCKED');}
   const payload=parseResponse(operationResponseSchema,await this.request('POST',MANUFACTURER_DEVICE_OPERATION_PATH,{cabinetid:query.cabinetId,slotNum:String(query.slotNum),operationType:query.operationType,reason:query.reason??''}));
   this.throwProviderError(payload.code,payload.msg,MANUFACTURER_DEVICE_OPERATION_PATH);
   return payload;
@@ -159,5 +164,19 @@ export function reconcileManufacturerStation(d:Data,localStation:Station,snapsho
 /** Applies only unambiguous telemetry. Slot/battery differences require operator review. */
 export function applyManufacturerStationTelemetry(d:Data,stationId:string,snapshot:ManufacturerDeviceSnapshot,syncedAt=Date.now()){const station=d.stations.find(s=>s.id===stationId);if(!station)throw new DomainError('Station introuvable.',404);if(station.providerDeviceId&&station.providerDeviceId!==snapshot.deviceId)throw new ManufacturerError('Identifiant fabricant incohérent pour cette station.',409,'MALFORMED');const differences=reconcileManufacturerStation(d,station,snapshot);station.provider='manufacturer';station.providerDeviceId=snapshot.deviceId;station.providerStatus=snapshot.online?'ONLINE':'OFFLINE';station.providerLastSyncedAt=syncedAt;return {station,differences};}
 
-export function resolveManufacturerConfig(env:Record<string,string|undefined>):ManufacturerConfig|undefined {if((env.MANUFACTURER_ALLOW_PHYSICAL_ACTIONS??'false')!=='false')throw new ManufacturerError('MANUFACTURER_ALLOW_PHYSICAL_ACTIONS doit rester false.',503,'PHYSICAL_BLOCKED');const provider=env.MANUFACTURER_PROVIDER?.trim().toLowerCase();if(!provider){if(env.MANUFACTURER_USERNAME||env.MANUFACTURER_PASSWORD)throw new ManufacturerError('MANUFACTURER_PROVIDER=bajie est requis lorsque des credentials fabricant sont configurés.',503,'AUTH');return undefined;}if(provider==='disabled'){if(env.MANUFACTURER_USERNAME||env.MANUFACTURER_PASSWORD)throw new ManufacturerError('Credentials fabricant présents alors que le provider est désactivé.',503,'AUTH');return undefined;}if(provider!=='bajie')throw new ManufacturerError('Provider fabricant non supporté.',503,'AUTH');const username=env.MANUFACTURER_USERNAME,password=env.MANUFACTURER_PASSWORD,baseUrl=env.MANUFACTURER_API_BASE_URL;if(!username||!password||!baseUrl)throw new ManufacturerError('Configuration Bajie incomplète : URL, username et password sont requis.',503,'AUTH');return {baseUrl,username,password,allowPhysicalActions:false};}
-export function validateManufacturerStartup(env:Record<string,string|undefined>):ManufacturerConfig|undefined {const config=resolveManufacturerConfig(env);if(config&&!env.MANUFACTURER_SYNC_SECRET)throw new ManufacturerError('MANUFACTURER_SYNC_SECRET est requis pour le scheduler staging.',503,'AUTH');return config;}
+export function resolveManufacturerConfig(env:Record<string,string|undefined>):ManufacturerConfig|undefined {
+ // Only the two exact literals are accepted: a typo ('yes', 'TRUE', '1') must fail closed rather
+ // than be read as truthy or silently fall back to false, because both mistakes are dangerous.
+ const flag=env.MANUFACTURER_ALLOW_PHYSICAL_ACTIONS??'false';if(flag!=='true'&&flag!=='false')throw new ManufacturerError("MANUFACTURER_ALLOW_PHYSICAL_ACTIONS n'accepte que 'true' ou 'false'.",503,'PHYSICAL_BLOCKED');
+ const allowPhysicalActions=flag==='true';const provider=env.MANUFACTURER_PROVIDER?.trim().toLowerCase();
+ if(allowPhysicalActions&&provider!=='bajie')throw new ManufacturerError('Les actions physiques exigent MANUFACTURER_PROVIDER=bajie.',503,'PHYSICAL_BLOCKED');if(!provider){if(env.MANUFACTURER_USERNAME||env.MANUFACTURER_PASSWORD)throw new ManufacturerError('MANUFACTURER_PROVIDER=bajie est requis lorsque des credentials fabricant sont configurés.',503,'AUTH');return undefined;}if(provider==='disabled'){if(env.MANUFACTURER_USERNAME||env.MANUFACTURER_PASSWORD)throw new ManufacturerError('Credentials fabricant présents alors que le provider est désactivé.',503,'AUTH');return undefined;}if(provider!=='bajie')throw new ManufacturerError('Provider fabricant non supporté.',503,'AUTH');const username=env.MANUFACTURER_USERNAME,password=env.MANUFACTURER_PASSWORD,baseUrl=env.MANUFACTURER_API_BASE_URL;if(!username||!password||!baseUrl)throw new ManufacturerError('Configuration Bajie incomplète : URL, username et password sont requis.',503,'AUTH');return {baseUrl,username,password,allowPhysicalActions};}
+export function validateManufacturerStartup(env:Record<string,string|undefined>):ManufacturerConfig|undefined {
+ const config=resolveManufacturerConfig(env);if(config&&!env.MANUFACTURER_SYNC_SECRET)throw new ManufacturerError('MANUFACTURER_SYNC_SECRET est requis pour le scheduler staging.',503,'AUTH');
+ // A real ejection is a network call, and only the Stripe path has the asynchronous seam for one
+ // (AsyncBatteryEjector). RentalEngine.start(), used in mock payment mode, ejects synchronously
+ // inside the transaction through MockBatteryStationProvider — with a station linked to real
+ // hardware it would mark a rental ACTIVE on a battery that never physically left. Fail closed
+ // on that combination at startup instead of discovering it on a customer's first rental.
+ if(config?.allowPhysicalActions&&resolvePaymentMode(env)!=='stripe_test')throw new ManufacturerError('Les éjections physiques réelles exigent PAYMENT_PROVIDER=stripe_test : le mode mock éjecte de façon synchrone et ne pilote aucune borne réelle.',503,'PHYSICAL_BLOCKED');
+ return config;
+}
