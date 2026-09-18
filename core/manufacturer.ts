@@ -45,6 +45,12 @@ const listItemSchema=z.object({price:z.object({priceId:z.number(),freeDuration:z
 // other endpoint on this API, so code is what's actually checked, exactly like the read endpoints.
 const operationResponseSchema=z.object({msg:z.string(),code:z.number().int()}).passthrough();
 const listResponseSchema=z.object({msg:z.string(),code:z.number().int(),list:z.array(listItemSchema)}).passthrough();
+// Confirmed live against DTA55480 on 2026-09-18 ({"msg":"Device not online.","code":2004}): a
+// non-zero code response carries no `data`/`list` at all, not an empty or placeholder one. The
+// full schemas above require that field, so validating against them first — before the code is
+// even checked — misreports every real provider error as a malformed response. This envelope is
+// checked, and the code inspected, before the stricter success-only schema ever runs.
+const envelopeSchema=z.object({msg:z.string(),code:z.number().int()}).passthrough();
 const parseResponse=<T extends z.ZodTypeAny>(schema:T,value:unknown):z.infer<T>=>{const parsed=schema.safeParse(value);if(!parsed.success)throw new ManufacturerError('Réponse fabricant mal formée.',502,'MALFORMED');return parsed.data;};
 
 const finite=(value:string,label:string)=>{const parsed=Number(value);if(!Number.isFinite(parsed))throw new ManufacturerError(`Réponse fabricant invalide (${label}).`,502,'MALFORMED');return parsed;};
@@ -62,8 +68,8 @@ export class ManufacturerHttpClient {
   this.baseUrl=base.toString().replace(/\/$/,'');this.timeoutMs=config.timeoutMs??8_000;
   this.endpointAuth=endpointAuth??(path=>{if(![MANUFACTURER_DEVICE_INFO_PATH,MANUFACTURER_DEVICE_LIST_PATH,MANUFACTURER_DEVICE_OPERATION_PATH].includes(path))throw new ManufacturerError('Mode d’authentification non documenté pour cet endpoint.',503,'AUTH');return {Authorization:`Basic ${safeBase64(`${config.username}:${config.password}`)}`};});
  }
- async getDeviceInfo(query:ManufacturerDeviceQuery){const payload=parseResponse(deviceResponseSchema,await this.request('GET',MANUFACTURER_DEVICE_INFO_PATH,{deviceId:query.deviceId}));this.throwProviderError(payload.code,payload.msg,MANUFACTURER_DEVICE_INFO_PATH);return mapDevice(query.deviceId,payload.data);}
- async listDevices(query:ManufacturerListQuery){const payload=parseResponse(listResponseSchema,await this.request('POST',MANUFACTURER_DEVICE_LIST_PATH,{coordType:query.coordType,zoomLevel:String(query.zoomLevel),lat:String(query.lat),lng:String(query.lng),showPrice:String(query.showPrice)}));this.throwProviderError(payload.code,payload.msg,MANUFACTURER_DEVICE_LIST_PATH);return payload.list.map(item=>({shopId:item.shop.id,name:item.shop.shopName,address:item.shop.shopAddress,latitude:finite(item.shop.latitude,'latitude'),longitude:finite(item.shop.longitude,'longitude'),batteryCount:count(item.cabinet.batteryNum,'batteryNum'),freeCount:count(item.cabinet.freeNum,'freeNum'),informationStatus:item.cabinet.infoStatus}));}
+ async getDeviceInfo(query:ManufacturerDeviceQuery){const raw=await this.request('GET',MANUFACTURER_DEVICE_INFO_PATH,{deviceId:query.deviceId});const envelope=parseResponse(envelopeSchema,raw);this.throwProviderError(envelope.code,envelope.msg,MANUFACTURER_DEVICE_INFO_PATH);const payload=parseResponse(deviceResponseSchema,raw);return mapDevice(query.deviceId,payload.data);}
+ async listDevices(query:ManufacturerListQuery){const raw=await this.request('POST',MANUFACTURER_DEVICE_LIST_PATH,{coordType:query.coordType,zoomLevel:String(query.zoomLevel),lat:String(query.lat),lng:String(query.lng),showPrice:String(query.showPrice)});const envelope=parseResponse(envelopeSchema,raw);this.throwProviderError(envelope.code,envelope.msg,MANUFACTURER_DEVICE_LIST_PATH);const payload=parseResponse(listResponseSchema,raw);return payload.list.map(item=>({shopId:item.shop.id,name:item.shop.shopName,address:item.shop.shopAddress,latitude:finite(item.shop.latitude,'latitude'),longitude:finite(item.shop.longitude,'longitude'),batteryCount:count(item.cabinet.batteryNum,'batteryNum'),freeCount:count(item.cabinet.freeNum,'freeNum'),informationStatus:item.cabinet.infoStatus}));}
  /**
   * Confirmed endpoint (docs/EXTERNAL_BLOCKERS.md), not yet called from anywhere in server/ or
   * core/stripe-coordinator.ts. operationType 'pop' is a real physical action — this method alone
