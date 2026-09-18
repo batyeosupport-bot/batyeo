@@ -2,17 +2,29 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {seedData} from '../core/seed';
 import {validateData} from '../core/invariants';
-import type {Data} from '../core/types';
+import {emptyData,type Data} from '../core/types';
 import type {Repository} from '../core/repository';
 import type {ManufacturerDeviceSnapshot} from '../core/manufacturer';
 import {ManufacturerError} from '../core/manufacturer';
-import {ManufacturerSyncService,linkManufacturerStation,providerHealth} from '../core/manufacturer-sync';
+import {ManufacturerSyncService,linkManufacturerStation,providerHealth,compareManufacturerSnapshot} from '../core/manufacturer-sync';
 import {dashboard} from '../core/queries';
 import {createApi} from '../server/http';
 
 class MemoryRepository implements Repository {constructor(public data:Data){}async read(){return structuredClone(this.data);}async transaction<T>(fn:(data:Data)=>T){const next=structuredClone(this.data),value=fn(next);validateData(next);this.data=next;return value;}}
 const snapshot=(deviceId:string,online=true):ManufacturerDeviceSnapshot=>({deviceId,cabinetId:'cabinet',qrCode:'qr',online,totalSlots:4,emptySlots:1,busySlots:99,signal:'documented-value',type:'cabinet-type',ip:'10.0.0.1',shopId:'shop',shopName:'Demo',shopAddress:'Demo',latitude:null,longitude:null,batteries:[{id:'BAT-UNKNOWN',slot:1,voltage:4100}],slots:[{position:1,battery:{id:'BAT-UNKNOWN',slot:1,voltage:4100}},{position:2,battery:null},{position:3,battery:null},{position:4,battery:null}],availability:1,lastSeenAt:null});
 
+test('compareManufacturerSnapshot flags a battery missing from the provider as unexplained only when no BATYEO rental accounts for it',()=>{
+ const d=emptyData();d.partners.push({id:'p',name:'P',city:'Paris',commissionBps:1000});d.venues.push({id:'v',partnerId:'p',name:'V',city:'Paris',address:'A',category:'Bar',hours:'24/7'});d.stations.push({id:'s',publicId:'s',venueId:'v',partnerId:'p',online:true,failure:'none',capacity:1});d.slots.push({id:'slot-1',stationId:'s',position:1,batteryId:'bat-1'});d.batteries.push({id:'bat-1',charge:100,status:'AVAILABLE'});
+ const link=linkManufacturerStation(d,'s','BAJIE','EXT-1',100);
+ const emptySnapshot:ManufacturerDeviceSnapshot={deviceId:'EXT-1',cabinetId:'c',qrCode:'qr',online:true,totalSlots:1,emptySlots:1,busySlots:0,signal:'x',type:'t',ip:'1.1.1.1',shopId:'shop',shopName:'n',shopAddress:'a',latitude:null,longitude:null,batteries:[],slots:[{position:1,battery:null}],availability:0,lastSeenAt:null};
+ const withoutRental=compareManufacturerSnapshot(d,link,emptySnapshot,100_000);
+ assert.ok(withoutRental.some(x=>x.kind==='UNEXPLAINED_SLOT_CHANGE'&&x.local==='bat-1'));
+ assert.ok(withoutRental.some(x=>x.kind==='MISSING_BATTERY'&&x.local==='bat-1'));
+ d.rentals.push({id:'r1',customerId:'c',partnerId:'p',stationId:'s',batteryId:'bat-1',returnStationId:null,state:'ACTIVE',paymentState:'AUTHORIZED',physicalState:'EJECTED',createdAt:99_000,startedAt:99_000,returnedAt:null,deadline:null,pricing:{id:'pr',hourlyCents:200,capCents:800,depositCents:2000,deadlineHours:48,commissionBps:2000},amountCents:0,commissionCents:0,idempotencyKey:'k',error:null,simulatedMinutes:0});
+ const withRental=compareManufacturerSnapshot(d,link,emptySnapshot,100_000);
+ assert.ok(!withRental.some(x=>x.kind==='UNEXPLAINED_SLOT_CHANGE'));
+ assert.ok(withRental.some(x=>x.kind==='MISSING_BATTERY'));
+});
 test('manufacturer mapping prevents duplicate external IDs and supports provider registry',()=>{const data=seedData('x');const first=linkManufacturerStation(data,'station-paris','BAJIE','BJH02347',100);assert.equal(first.externalId,'BJH02347');assert.throws(()=>linkManufacturerStation(data,'station-lyon','BAJIE','BJH02347',101),/déjà associé/);validateData(data);});
 
 test('read-only station sync persists normalized telemetry and reconciliation without overwriting BATYEO state',async()=>{const data=seedData('x');data.stations[0].online=false;linkManufacturerStation(data,'station-paris','BAJIE','BJH02347',100);const repo=new MemoryRepository(data),service=new ManufacturerSyncService(repo,{getDeviceInfo:async id=>snapshot(id,true)},{now:()=>200});const run=await service.run({trigger:'MANUAL'});assert.equal(run.status,'COMPLETED');assert.equal(repo.data.stations[0].online,false);assert.equal(repo.data.stations[0].providerStatus,'ONLINE');assert.equal(repo.data.stationProviderSnapshots[0].busySlots,99);assert.ok(repo.data.reconciliationRecords.some(row=>row.kind==='STATION_STATUS'&&row.status==='OPEN'));assert.ok(repo.data.reconciliationRecords.some(row=>row.kind==='UNKNOWN_BATTERY'));});

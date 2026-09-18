@@ -114,6 +114,11 @@ model Station {
   providerStatus String?
   providerLastSyncedAt DateTime?
   lastSeenAt DateTime?
+  stripeTerminalLocationId String?
+  stripeTerminalLocationUpdatedAt DateTime?
+  rentalsBlocked Boolean @default(false)
+  rentalsBlockedReason String?
+  rentalsBlockedAt DateTime?
   venue         Venue @relation(fields: [venueId, partnerId], references: [id, partnerId])
   slots         Slot[]
   departures    Rental[] @relation("departure")

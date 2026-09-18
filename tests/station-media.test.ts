@@ -1,4 +1,5 @@
-import test from 'node:test';import assert from 'node:assert/strict';import {emptyData} from '../core/types';import {createStation,publicQrUrl,setStripeTerminalLocation} from '../core/station-admin';import {activePlaylist,validatePlaylist} from '../core/media';
+import test from 'node:test';import assert from 'node:assert/strict';import {emptyData} from '../core/types';import {createStation,publicQrUrl,setStripeTerminalLocation,blockStationRentals,unblockStationRentals} from '../core/station-admin';import {activePlaylist,validatePlaylist} from '../core/media';
+import {RentalEngine} from '../core/rental';
 test('admin station creation provisions empty slots and unique public QR',()=>{const d=emptyData();d.partners.push({id:'p',name:'P',city:'Paris',commissionBps:1000});d.venues.push({id:'v',partnerId:'p',name:'V',city:'Paris',address:'A',category:'Bar',hours:'24/7'});const s=createStation(d,{partnerId:'p',venueId:'v',publicId:'new-station',capacity:3});assert.equal(d.slots.filter(x=>x.stationId===s.id).length,3);assert.equal(publicQrUrl('https://batyeo.test/','new-station'),'https://batyeo.test/rent/new-station');assert.throws(()=>createStation(d,{partnerId:'p',venueId:'v',publicId:'new-station',capacity:3}));});
 test('setStripeTerminalLocation assigns, clears and rejects a malformed Location ID, bumping its own timestamp each time',()=>{
  const d=emptyData();d.partners.push({id:'p',name:'P',city:'Paris',commissionBps:1000});d.venues.push({id:'v',partnerId:'p',name:'V',city:'Paris',address:'A',category:'Bar',hours:'24/7'});
@@ -12,5 +13,22 @@ test('setStripeTerminalLocation assigns, clears and rejects a malformed Location
  assert.equal(s.stripeTerminalLocationUpdatedAt,200);
  assert.throws(()=>setStripeTerminalLocation(d,s.id,'not-a-location-id'),/Location Stripe invalide/);
  assert.throws(()=>setStripeTerminalLocation(d,'missing',null),/Station introuvable/);
+});
+test('blockStationRentals/unblockStationRentals gate new rentals independently of online/failure',()=>{
+ const d=emptyData();d.partners.push({id:'p',name:'P',city:'Paris',commissionBps:1000});d.venues.push({id:'v',partnerId:'p',name:'V',city:'Paris',address:'A',category:'Bar',hours:'24/7'});
+ const s=createStation(d,{partnerId:'p',venueId:'v',publicId:'blockable',capacity:1});s.online=true;
+ d.batteries.push({id:'bat-1',charge:100,status:'AVAILABLE'});d.slots.find(x=>x.stationId===s.id)!.batteryId='bat-1';
+ d.pricing.push({id:'pr',hourlyCents:200,capCents:800,depositCents:2000,deadlineHours:48,commissionBps:2000});
+ const engine=new RentalEngine();
+ assert.ok(engine.create(d,'cust-1','blockable','key-1'));
+ blockStationRentals(d,s.id,'Maintenance capteur');
+ assert.equal(s.rentalsBlocked,true);assert.equal(s.rentalsBlockedReason,'Maintenance capteur');
+ assert.throws(()=>engine.create(d,'cust-2','blockable','key-2'),/temporairement bloquée/);
+ assert.throws(()=>blockStationRentals(d,s.id,'   '),/Motif de blocage invalide/);
+ assert.throws(()=>blockStationRentals(d,'missing','x'),/Station introuvable/);
+ unblockStationRentals(d,s.id);
+ assert.equal(s.rentalsBlocked,false);assert.equal(s.rentalsBlockedReason,null);
+ assert.ok(engine.create(d,'cust-2','blockable','key-2'));
+ assert.throws(()=>unblockStationRentals(d,'missing'),/Station introuvable/);
 });
 test('media playlist filters station and schedule and rejects unsafe media',()=>{const p={version:1,checksum:'x',issuedAt:0,items:[{id:'1',name:'Ad',kind:'VIDEO' as const,uri:'https://cdn.test/ad.mp4',checksum:'h',durationMs:5000,status:'PUBLISHED' as const,startsAt:null,endsAt:null,targetStationIds:['s'],createdAt:0}]};assert.equal(activePlaylist(p,'s').length,1);assert.equal(activePlaylist(p,'other').length,0);assert.equal(validatePlaylist(p),p);assert.throws(()=>validatePlaylist({...p,items:[{...p.items[0],uri:'http://unsafe'}]}));});

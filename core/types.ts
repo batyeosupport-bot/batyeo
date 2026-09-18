@@ -10,7 +10,7 @@ export interface User { id:string; email:string; name:string; role:Role; partner
 export interface Partner { id:string; name:string; city:string; commissionBps:number; }
 export interface Venue { id:string; partnerId:string; name:string; city:string; address:string; category:string; hours:string; latitude?:number|null; longitude?:number|null; }
 export type FailureMode = 'none'|'ejection'|'timeout'|'payment';
-export interface Station { id:string; publicId:string; venueId:string; partnerId:string; online:boolean; failure:FailureMode; capacity:number; provider?:'mock'|'manufacturer'; providerDeviceId?:string|null; providerStatus?:string|null; providerLastSyncedAt?:number|null; lastSeenAt?:number|null; stripeTerminalLocationId?:string|null; stripeTerminalLocationUpdatedAt?:number|null; }
+export interface Station { id:string; publicId:string; venueId:string; partnerId:string; online:boolean; failure:FailureMode; capacity:number; provider?:'mock'|'manufacturer'; providerDeviceId?:string|null; providerStatus?:string|null; providerLastSyncedAt?:number|null; lastSeenAt?:number|null; stripeTerminalLocationId?:string|null; stripeTerminalLocationUpdatedAt?:number|null; rentalsBlocked?:boolean; rentalsBlockedReason?:string|null; rentalsBlockedAt?:number|null; }
 export interface Battery { id:string; charge:number; status:'AVAILABLE'|'RENTED'|'MAINTENANCE'|'LOST'; }
 export interface Slot { id:string; stationId:string; batteryId:string|null; position:number; }
 export const PAYMENT_STATES = ['PENDING','AUTHORIZING','AUTHORIZED','CAPTURING','CAPTURED','RELEASING','RELEASED','FAILED','UNKNOWN'] as const;
@@ -33,7 +33,7 @@ export type ManufacturerName='BAJIE';
 export interface StationProviderLink {id:string;stationId:string;manufacturer:ManufacturerName;externalId:string;active:boolean;createdAt:number;updatedAt:number;}
 /** Latest normalized provider observation. Documented vendor values remain telemetry, never domain truth. */
 export interface StationProviderSnapshot {id:string;linkId:string;stationId:string;syncedAt:number;online:boolean;totalSlots:number;emptySlots:number;busySlots:number;availability:number;signal:string;deviceType:string;ip:string;shopId:string;shopName:string;shopAddress:string;slots:{position:number;batteryId:string|null;voltage:number|null}[];}
-export type ReconciliationKind='STATION_STATUS'|'BATTERY_COUNT'|'AVAILABILITY'|'SLOT_MISMATCH'|'UNKNOWN_SLOT'|'UNKNOWN_BATTERY'|'MISSING_BATTERY'|'PROVIDER_ERROR'|'MALFORMED_PROVIDER_RESPONSE';
+export type ReconciliationKind='STATION_STATUS'|'BATTERY_COUNT'|'AVAILABILITY'|'SLOT_MISMATCH'|'UNKNOWN_SLOT'|'UNKNOWN_BATTERY'|'MISSING_BATTERY'|'UNEXPLAINED_SLOT_CHANGE'|'PROVIDER_ERROR'|'MALFORMED_PROVIDER_RESPONSE';
 export interface ReconciliationRecord {id:string;stationId:string;linkId:string;kind:ReconciliationKind;position:number|null;localValue:unknown;providerValue:unknown;status:'OPEN'|'RESOLVED';firstDetectedAt:number;lastDetectedAt:number;resolvedAt:number|null;}
 export type ProviderHealth='HEALTHY'|'DEGRADED'|'DOWN'|'UNKNOWN';
 export interface ManufacturerSyncRun {id:string;provider:ManufacturerName;trigger:'SCHEDULED'|'MANUAL'|'WEBHOOK';requestedBy:string|null;startedAt:number;completedAt:number|null;status:'RUNNING'|'COMPLETED'|'PARTIAL'|'FAILED';total:number;succeeded:number;failed:number;mismatches:number;errorSummary:{stationId:string;kind:string}[];}

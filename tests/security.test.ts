@@ -131,3 +131,19 @@ test('station/stripe-location is refused for a station outside the operator\'s t
  const {repo:repo2,token:supportToken}=await authenticated('SUPPORT');
  assert.equal((await call(repo2,'station/stripe-location',{stationId:repo2.data.stations[0].id,locationId:'tml_ABC123'},supportToken)).status,403);
 });
+test('station/block-rentals and station/unblock-rentals gate a station for maintenance, rejecting a blank reason',async()=>{
+ const {repo,token}=await authenticated();
+ const station=repo.data.stations[0];
+ assert.equal((await call(repo,'station/block-rentals',{stationId:station.id,reason:'   '},token)).status,400);
+ const blocked=await call(repo,'station/block-rentals',{stationId:station.id,reason:'Maintenance capteur'},token);
+ assert.equal(blocked.status,200);
+ assert.equal(repo.data.stations.find(s=>s.id===station.id)?.rentalsBlocked,true);
+ assert.equal(repo.data.stations.find(s=>s.id===station.id)?.rentalsBlockedReason,'Maintenance capteur');
+ const unblocked=await call(repo,'station/unblock-rentals',{stationId:station.id},token);
+ assert.equal(unblocked.status,200);
+ assert.equal(repo.data.stations.find(s=>s.id===station.id)?.rentalsBlocked,false);
+});
+test('station/block-rentals is refused for a non-operator role',async()=>{
+ const {repo,token}=await authenticated('SUPPORT');
+ assert.equal((await call(repo,'station/block-rentals',{stationId:repo.data.stations[0].id,reason:'x'},token)).status,403);
+});

@@ -19,7 +19,16 @@ export function linkManufacturerStation(d:Data,stationId:string,manufacturer:Man
  station.provider='manufacturer';station.providerDeviceId=normalized;return link;
 }
 
-export function compareManufacturerSnapshot(d:Data,link:StationProviderLink,snapshot:ManufacturerDeviceSnapshot):Difference[]{
+/** A battery BATYEO still shows as present is a normal, expected gap while our own rental for it
+ * is in flight (EJECTING/UNKNOWN) or has just closed it out (any rental created in the window) —
+ * the sync simply hasn't caught up yet. Anything else missing with no BATYEO rental to explain it
+ * is a battery that left the station outside our system entirely: a foreign rental through the
+ * manufacturer's own native flow, a manual admin eject, or worse. See docs/EXTERNAL_BLOCKERS.md. */
+const UNEXPLAINED_WINDOW_MS=30*60_000;
+function explainedByOwnRental(d:Data,stationId:string,batteryId:string,now:number):boolean{
+ return d.rentals.some(r=>r.stationId===stationId&&(r.batteryId===batteryId&&r.createdAt>=now-UNEXPLAINED_WINDOW_MS||r.physicalState==='EJECTING'||r.physicalState==='UNKNOWN'));
+}
+export function compareManufacturerSnapshot(d:Data,link:StationProviderLink,snapshot:ManufacturerDeviceSnapshot,now=Date.now()):Difference[]{
  const station=d.stations.find(row=>row.id===link.stationId);if(!station)throw new DomainError('Station introuvable.',404);
  const localSlots=d.slots.filter(slot=>slot.stationId===station.id),localBatteryIds=new Set(localSlots.flatMap(slot=>slot.batteryId?[slot.batteryId]:[]));
  const providerBatteryIds=new Set(snapshot.batteries.map(battery=>battery.id));const differences:Difference[]=[];
@@ -28,14 +37,14 @@ export function compareManufacturerSnapshot(d:Data,link:StationProviderLink,snap
  const available=localSlots.filter(slot=>slot.batteryId&&d.batteries.some(battery=>battery.id===slot.batteryId&&battery.status==='AVAILABLE')).length;
  if(available!==snapshot.availability)differences.push({kind:'AVAILABILITY',position:null,local:available,provider:snapshot.availability});
  for(const providerSlot of snapshot.slots){const local=localSlots.find(slot=>slot.position===providerSlot.position);const providerId=providerSlot.battery?.id??null;if(!local)differences.push({kind:'UNKNOWN_SLOT',position:providerSlot.position,local:null,provider:providerId});else if(local.batteryId!==providerId)differences.push({kind:'SLOT_MISMATCH',position:providerSlot.position,local:local.batteryId,provider:providerId});if(providerId&&!d.batteries.some(battery=>battery.id===providerId))differences.push({kind:'UNKNOWN_BATTERY',position:providerSlot.position,local:null,provider:providerId});}
- for(const localId of localBatteryIds)if(!providerBatteryIds.has(localId)){const position=localSlots.find(slot=>slot.batteryId===localId)?.position??null;differences.push({kind:'MISSING_BATTERY',position,local:localId,provider:null});}
+ for(const localId of localBatteryIds)if(!providerBatteryIds.has(localId)){const position=localSlots.find(slot=>slot.batteryId===localId)?.position??null;differences.push({kind:'MISSING_BATTERY',position,local:localId,provider:null});if(!explainedByOwnRental(d,station.id,localId,now))differences.push({kind:'UNEXPLAINED_SLOT_CHANGE',position,local:localId,provider:null});}
  return differences;
 }
 
 function normalizedSnapshot(link:StationProviderLink,snapshot:ManufacturerDeviceSnapshot,now:number):StationProviderSnapshot{return {id:`snapshot-${link.id}`,linkId:link.id,stationId:link.stationId,syncedAt:now,online:snapshot.online,totalSlots:snapshot.totalSlots,emptySlots:snapshot.emptySlots,busySlots:snapshot.busySlots,availability:snapshot.availability,signal:snapshot.signal,deviceType:snapshot.type,ip:snapshot.ip,shopId:snapshot.shopId,shopName:snapshot.shopName,shopAddress:snapshot.shopAddress,slots:snapshot.slots.map(slot=>({position:slot.position,batteryId:slot.battery?.id??null,voltage:slot.battery?.voltage??null}))};}
 
 function persistComparison(d:Data,link:StationProviderLink,snapshot:ManufacturerDeviceSnapshot,now:number){
- const station=d.stations.find(row=>row.id===link.stationId);if(!station)throw new DomainError('Station introuvable.',404);const differences=compareManufacturerSnapshot(d,link,snapshot);
+ const station=d.stations.find(row=>row.id===link.stationId);if(!station)throw new DomainError('Station introuvable.',404);const differences=compareManufacturerSnapshot(d,link,snapshot,now);
  const keys=new Set(differences.map(diff=>`${diff.kind}:${diff.position??''}`));
  for(const diff of differences){const open=d.reconciliationRecords.find(record=>record.linkId===link.id&&record.kind===diff.kind&&record.position===diff.position&&record.status==='OPEN');if(open){open.localValue=diff.local;open.providerValue=diff.provider;open.lastDetectedAt=now;}else d.reconciliationRecords.push({id:crypto.randomUUID(),stationId:station.id,linkId:link.id,kind:diff.kind,position:diff.position,localValue:diff.local,providerValue:diff.provider,status:'OPEN',firstDetectedAt:now,lastDetectedAt:now,resolvedAt:null});}
  for(const record of d.reconciliationRecords)if(record.linkId===link.id&&record.status==='OPEN'&&!keys.has(`${record.kind}:${record.position??''}`)){record.status='RESOLVED';record.resolvedAt=now;record.lastDetectedAt=now;}

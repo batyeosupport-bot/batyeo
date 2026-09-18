@@ -27,7 +27,7 @@ export class PrismaRepository implements Repository {
   ]);
   return {
    users:users.map(u=>({...u,disabledAt:ms(u.disabledAt)})),partners,venues,
-   stations:stations.map(s=>({...s,failure:s.failure as Data['stations'][number]['failure'],provider:s.provider==='manufacturer'?'manufacturer':'mock',providerLastSyncedAt:ms(s.providerLastSyncedAt),lastSeenAt:ms(s.lastSeenAt)})),slots,
+   stations:stations.map(s=>({...s,failure:s.failure as Data['stations'][number]['failure'],provider:s.provider==='manufacturer'?'manufacturer':'mock',providerLastSyncedAt:ms(s.providerLastSyncedAt),lastSeenAt:ms(s.lastSeenAt),stripeTerminalLocationUpdatedAt:ms(s.stripeTerminalLocationUpdatedAt),rentalsBlockedAt:ms(s.rentalsBlockedAt)})),slots,
    batteries:batteries.map(b=>({...b,status:b.status as Data['batteries'][number]['status']})),
    rentals:rentals.map(row=>{const {pricingId,pricingSnapshot,...r}=row;void pricingId;return ({...r,paymentState:r.paymentState&&PAYMENT_STATES.includes(r.paymentState as typeof PAYMENT_STATES[number])?r.paymentState as Data['rentals'][number]['paymentState']:undefined,physicalState:r.physicalState&&PHYSICAL_STATES.includes(r.physicalState as typeof PHYSICAL_STATES[number])?r.physicalState as Data['rentals'][number]['physicalState']:undefined,createdAt:r.createdAt.getTime(),startedAt:ms(r.startedAt),returnedAt:ms(r.returnedAt),deadline:ms(r.deadline),pricing:snapshot(pricingSnapshot)});}),
    events:events.map(e=>({...e,at:e.at.getTime()})),
@@ -56,7 +56,7 @@ export class PrismaRepository implements Repository {
   await sync(before.users,after.users,u=>{const data={...u,disabledAt:date(u.disabledAt),authVersion:u.authVersion??0};return tx.user.upsert({where:{id:u.id},create:data,update:data});});
   await sync(before.partnerUsers,after.partnerUsers,m=>tx.partnerUser.upsert({where:{id:m.id},create:m,update:m}),ids=>tx.partnerUser.deleteMany({where:{id:{in:ids}}}));
   await sync(before.venues,after.venues,v=>tx.venue.upsert({where:{id:v.id},create:v,update:v}));
-  await sync(before.stations,after.stations,s=>{const data={...s,provider:s.provider??'mock',providerDeviceId:s.providerDeviceId??null,providerStatus:s.providerStatus??null,providerLastSyncedAt:date(s.providerLastSyncedAt),lastSeenAt:date(s.lastSeenAt)};return tx.station.upsert({where:{id:s.id},create:data,update:data});});
+  await sync(before.stations,after.stations,s=>{const data={...s,provider:s.provider??'mock',providerDeviceId:s.providerDeviceId??null,providerStatus:s.providerStatus??null,providerLastSyncedAt:date(s.providerLastSyncedAt),lastSeenAt:date(s.lastSeenAt),stripeTerminalLocationId:s.stripeTerminalLocationId??null,stripeTerminalLocationUpdatedAt:date(s.stripeTerminalLocationUpdatedAt),rentalsBlocked:s.rentalsBlocked??false,rentalsBlockedReason:s.rentalsBlockedReason??null,rentalsBlockedAt:date(s.rentalsBlockedAt)};return tx.station.upsert({where:{id:s.id},create:data,update:data});});
   await sync(before.batteries,after.batteries,b=>tx.battery.upsert({where:{id:b.id},create:b,update:b}));
   // Release moved batteries first, then attach them at the destination. All inside one TX.
   const changedSlots=after.slots.filter(s=>!same(before.slots.find(b=>b.id===s.id),s));

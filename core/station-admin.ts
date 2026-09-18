@@ -14,6 +14,21 @@ export function setStripeTerminalLocation(d:Data,stationId:string,locationId:str
  if(locationId!==null&&!/^tml_[a-zA-Z0-9]{1,255}$/.test(locationId))throw new DomainError('Identifiant de Location Stripe invalide (attendu : tml_…).',400);
  station.stripeTerminalLocationId=locationId;station.stripeTerminalLocationUpdatedAt=now;return station;
 }
+/**
+ * Remote maintenance switch, independent of online/failure (those carry other meaning read by
+ * the manufacturer sync and kiosk runtime). Distinct from the manufacturer's own "No Lease" — this
+ * is BATYEO's own server-side gate and blocks RentalEngine.create() regardless of what any
+ * provider-side switch is set to.
+ */
+export function blockStationRentals(d:Data,stationId:string,reason:string,now=Date.now()):Station {
+ const station=d.stations.find(s=>s.id===stationId);if(!station)throw new DomainError('Station introuvable.',404);
+ const trimmed=reason.trim();if(!trimmed||trimmed.length>500)throw new DomainError('Motif de blocage invalide.',400);
+ station.rentalsBlocked=true;station.rentalsBlockedReason=trimmed;station.rentalsBlockedAt=now;return station;
+}
+export function unblockStationRentals(d:Data,stationId:string):Station {
+ const station=d.stations.find(s=>s.id===stationId);if(!station)throw new DomainError('Station introuvable.',404);
+ station.rentalsBlocked=false;station.rentalsBlockedReason=null;station.rentalsBlockedAt=null;return station;
+}
 export interface CreateVenueInput {partnerId:string;name:string;city:string;address:string;category:string;hours:string;latitude?:number|null;longitude?:number|null;}
 export function createVenue(d:Data,input:CreateVenueInput):Venue {
  if(!input.name.trim()||input.name.length>120)throw new DomainError('Nom d’établissement invalide.',400);

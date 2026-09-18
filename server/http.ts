@@ -16,7 +16,7 @@ import {checksumConfig} from '../core/runtime-config';
 import {heartbeatHealth} from '../core/heartbeat';
 import {validateTranslations} from '../core/i18n';
 import type {Actor,Data,StationHeartbeatRecord} from '../core/types';
-import {createStation,createVenue,publicQrUrl,setStripeTerminalLocation} from '../core/station-admin';
+import {createStation,createVenue,publicQrUrl,setStripeTerminalLocation,blockStationRentals,unblockStationRentals} from '../core/station-admin';
 import {createMedia,setMediaStatus} from '../core/media-admin';
 
 const engine=new RentalEngine();
@@ -345,6 +345,28 @@ async function route(request:Request,path:string){
    assertTenant(current,station.partnerId);
    const updated=setStripeTerminalLocation(d,input.stationId,input.locationId?.trim()||null);
    audit(d,current,`Location Stripe Terminal assignée · ${station.publicId}`);
+   return {station:updated};
+  }));
+ }
+ if(path==='station/block-rentals'){
+  authorize(actor,'operate');
+  const input=z.object({stationId:id,reason:z.string().trim().min(1).max(500)}).strict().parse(body);
+  return reply(await write('operate',(d,current)=>{
+   const station=d.stations.find(s=>s.id===input.stationId);if(!station)throw new DomainError('Station introuvable.',404);
+   assertTenant(current,station.partnerId);
+   const updated=blockStationRentals(d,input.stationId,input.reason);
+   audit(d,current,`Locations bloquées · ${station.publicId} · ${input.reason}`);
+   return {station:updated};
+  }));
+ }
+ if(path==='station/unblock-rentals'){
+  authorize(actor,'operate');
+  const input=z.object({stationId:id}).strict().parse(body);
+  return reply(await write('operate',(d,current)=>{
+   const station=d.stations.find(s=>s.id===input.stationId);if(!station)throw new DomainError('Station introuvable.',404);
+   assertTenant(current,station.partnerId);
+   const updated=unblockStationRentals(d,input.stationId);
+   audit(d,current,`Locations débloquées · ${station.publicId}`);
    return {station:updated};
   }));
  }
