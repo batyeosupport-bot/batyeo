@@ -22,6 +22,11 @@ test('PostgreSQL migrations and constraints execute on the PGlite PostgreSQL eng
   const indexes=await db.query<{indexname:string}>(`SELECT indexname FROM pg_indexes WHERE schemaname='public'`);
   for(const expected of ['Rental_open_customer','Rental_open_battery','PricingStrategy_one_active','Rental_partnerId_createdAt_idx','User_email_case_insensitive','WebhookEvent_source_externalId_key','Payment_providerReference_idx','Station_providerDeviceId_idx','Station_provider_status_idx','StationProviderLink_manufacturer_externalId_key','StationProviderLink_one_active_per_manufacturer','ReconciliationRecord_one_open_difference','ManufacturerSyncRun_provider_startedAt_idx'])assert.ok(indexes.rows.some(r=>r.indexname===expected),expected);
   await db.exec(`INSERT INTO "Partner" (id,name,city,"commissionBps") VALUES ('p','Partner','Paris',2000);`);
+  // Surcharge de commission par partenaire : NULL = suit la grille, et les bornes restent gardées.
+  await db.exec(`INSERT INTO "Partner" (id,name,city,"commissionBps") VALUES ('p-grille','Partner','Paris',NULL);`);
+  await db.exec(`INSERT INTO "Partner" (id,name,city) VALUES ('p-defaut','Partner','Paris');`);
+  assert.equal((await db.query(`SELECT id FROM "Partner" WHERE "commissionBps" IS NULL`)).rows.length,2,'colonne nullable et sans valeur par défaut');
+  await assert.rejects(()=>db.exec(`INSERT INTO "Partner" (id,name,city,"commissionBps") VALUES ('p-hors-bornes','Partner','Paris',10001);`));
   await assert.rejects(()=>db.exec(`INSERT INTO "User" (id,email,name,"passwordHash",role,"partnerId") VALUES ('u','u@test.fr','User','hash','SUPER_ADMIN','p')`));
   await assert.rejects(()=>db.exec(`INSERT INTO "PricingStrategy" (id,"hourlyCents","capCents","depositCents","deadlineHours","commissionBps",active) VALUES ('bad',200,100,2000,48,2000,true)`));
   await db.exec(`INSERT INTO "PricingStrategy" (id,"hourlyCents","capCents","depositCents","deadlineHours","commissionBps",active) VALUES ('standard',200,800,2000,48,2000,true)`);
