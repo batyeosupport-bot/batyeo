@@ -29,7 +29,7 @@ Sources officielles :
 - Aucun champ `lastSeen` n’est publié dans le détail cabinet. BATYEO retourne donc `lastSeenAt: null` et conserve séparément la date de synchronisation locale.
 - `vol` est conservé comme tension fournisseur (`voltage`) et n’est pas converti en pourcentage de charge sans règle officielle.
 - `busySlots`, `emptySlots`, `freeNum` et `infoStatus` sont conservés sans interprétation métier supplémentaire au-delà de leur nom documenté.
-- Aucun mécanisme officiel de signature, identifiant d’événement ou contrat webhook fabricant n’a été confirmé. Le récepteur BATYEO conserve donc ces événements comme non fiables, les déduplique par empreinte interne du payload et ne les utilise jamais directement pour modifier l’état métier. Une lecture API documentée est déclenchée pour réconciliation lorsque le provider est configuré.
+- Mise à jour 2026-09-18 : un mécanisme de webhook **officiel et documenté** existe en fait (voir section dédiée plus bas), jamais repéré avant cette session. Tant que sa forme exacte (signature, identifiant d'événement, idempotence) n'est pas entièrement vérifiée, la prudence ci-dessus reste de mise : le récepteur BATYEO continue de traiter ces événements comme non fiables, de les dédupliquer par empreinte interne du payload et de ne jamais les utiliser directement pour modifier l'état métier — une lecture API documentée reste le déclencheur de réconciliation.
 
 ## Synchronisation BATYEO
 
@@ -55,9 +55,26 @@ Query params : cabinetid (requis), slotNum (requis), operationType (requis), rea
 
 `operationType` documenté : `restart, pop, popall, popallForNoAuth, popallForAuth, heartbeat, lock, unlock, lockStopCharge, report` — quasi identique à ce qui avait été repéré dans le panneau admin (differences : `lockStopCharge` documenté ici mais pas vu côté panneau ; `trunoff` vu côté panneau mais absent de cette doc). Implémenté dans `ManufacturerHttpClient.operateDevice()` (`core/manufacturer.ts`), testé contre ce contrat exact (`tests/manufacturer.test.ts`). **Jamais appelé depuis `server/` ou `core/stripe-coordinator.ts`** — `MANUFACTURER_ALLOW_PHYSICAL_ACTIONS` reste `false`, et aucune commande n'a été envoyée à la borne réelle pendant cette session, y compris les moins risquées (`heartbeat`, `report`).
 
-Le fabricant documente aussi un endpoint distinct **« Rent and eject the battery for the specified device slot »** et un cycle `Create Rent Order` / `Query Rent Order Status` / `Mark order status as completed` — un flux de location complet côté ChargeNow. Choix délibéré : ne pas l'utiliser. BATYEO veut rester la seule source de vérité pour ses locations (voir question de désactivation du flux natif ci-dessous) ; `cabinet/operation` pilote la borne directement sans créer de commande dans le système du fabricant.
+Le fabricant documente aussi deux autres endpoints d'éjection, vérifiés le 2026-09-18 :
+- `POST /cabinet/ejectByRepair` (`cabinetid`, `slotNum` — 0 ou null pour tout éjecter) : même indépendance vis-à-vis de leur système de commandes que `cabinet/operation`, mais sémantiquement une éjection de réparation/maintenance, pas une location normale.
+- `POST /cabinet/ejectByRent` (`cabinetid`, `rentOrderId`, `slotNum`) : **nécessite un `rentOrderId`**, donc dépend forcément d'avoir d'abord créé une commande via leur `Create Rent Order`.
+
+Choix délibéré de rester sur `cabinet/operation?operationType=pop` : BATYEO veut rester la seule source de vérité pour ses locations (voir question de désactivation du flux natif ci-dessous), et c'est le seul des trois qui pilote la borne directement sans dépendre ni créer de commande dans le système du fabricant.
 
 Reste à concevoir avant toute implémentation réelle du flux de location (pas juste le contrat bas niveau) : **quel slot/quelle batterie cibler** au moment d'appeler `operateDevice` — `AsyncBatteryEjector.ejectBatteryAsync()` n'a explicitement pas accès à `Data` (voir son commentaire dans `core/stripe-coordinator.ts`), donc ce choix ne peut pas se faire par une simple lecture locale au moment de l'appel.
+
+## Webhook officiel — repéré le 2026-09-18, forme exacte du push encore à vérifier
+
+La même documentation Apifox expose une section **« Cabinet Event Push »**, jamais repérée avant cette session (la doc précédente ne listait que `cabinet/query` et `cabinet/list`, tous deux lecture seule). Deux endpoints de configuration confirmés :
+
+```
+POST https://developer.chargenow.top/cdb-open-api/v1/cabinet/eventPush/config
+GET  https://developer.chargenow.top/cdb-open-api/v1/cabinet/eventPush/config/get
+```
+
+Ils permettent d'enregistrer une `pushUrl` (globale ou par événement) et de s'abonner à : `CABINET_ONLINE`, `CABINET_OFFLINE`, `CABINET_STATUS`, `BATTERY_IN`, **`BATTERY_BORROW_OUT`** (la sortie d'une batterie — exactement ce qui manquait pour une réconciliation en temps réel plutôt que par sondage), `BATTERY_ABNORMAL_WARNING`, `BATTERY_POPUP`, `ADMIN_RENTAL_ORDER`, `POS_INFO_STATUS`.
+
+**Non encore vérifié** : le endpoint documentant le contenu du push lui-même (ce que ChargeNow envoie réellement vers `pushUrl` — schéma exact, signature éventuelle, idempotence) existe dans la doc (« Cabinet Event Push », `POST`) mais son URL n'a pas pu être atteinte — le site de documentation est devenu inaccessible en cours de vérification (timeout, y compris en `curl` brut, probablement une limitation de débit après plusieurs requêtes automatisées). À reprendre avant toute intégration du webhook : tant que le format exact n'est pas confirmé, `core/manufacturer.ts` continue de ne traiter aucun événement entrant comme fiable par défaut (voir « Ambiguïtés documentaires » plus haut).
 
 ## Préparé côté BATYEO en attendant, sans rien deviner sur le contrat fabricant
 
