@@ -1,0 +1,4 @@
+{
+  "buildCommand": "pnpm run build:postgres",
+  "installCommand": "pnpm install --frozen-lockfile"
+}
