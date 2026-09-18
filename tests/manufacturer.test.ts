@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {ManufacturerApiError,ManufacturerBatteryStationProvider,ManufacturerError,ManufacturerHttpClient,applyManufacturerStationTelemetry,reconcileManufacturerStation,resolveManufacturerConfig,validateManufacturerStartup,type ManufacturerTransport} from '../core/manufacturer';
+import {ManufacturerApiError,ManufacturerBatteryEjector,ManufacturerBatteryStationProvider,ManufacturerError,ManufacturerHttpClient,applyManufacturerStationTelemetry,reconcileManufacturerStation,resolveManufacturerConfig,validateManufacturerStartup,type ManufacturerOperationType,type ManufacturerTransport} from '../core/manufacturer';
 import {MANUFACTURER_OPERATION_TYPES} from '../core/manufacturer';
-import {MockBatteryStationProvider} from '../core/providers';
+import {DomainError,MockBatteryStationProvider,PhysicalResultUnknownError} from '../core/providers';
 import {seedData} from '../core/seed';
 import {validateData} from '../core/invariants';
 import {sha256} from '../core/security';
@@ -49,6 +49,33 @@ test('operateDevice calls the confirmed cabinet/operation endpoint with Basic au
 test('operateDevice surfaces a non-zero response code as a typed provider error, never as success',async()=>{
  const client=new ManufacturerHttpClient(config,async()=>json({msg:'Device offline',code:1001}));
  await assert.rejects(()=>client.operateDevice({cabinetId:'DTA55480',slotNum:1,operationType:'pop'}),(error:unknown)=>error instanceof ManufacturerApiError&&error.providerCode===1001);
+});
+test('ManufacturerBatteryEjector picks the best-charged slot from a live cabinet/query, pops it, and returns that battery id',async()=>{
+ const data=seedData('unused');data.stationProviderLinks.push({id:'link-1',stationId:'station-paris',manufacturer:'BAJIE',externalId:'BJH02347',active:true,createdAt:0,updatedAt:0});
+ const repo=new MemoryRepository(data);let operateCall:{cabinetId:string;slotNum:number;operationType:string}|undefined;
+ const client={getDeviceInfo:async()=>new ManufacturerHttpClient(config,async()=>json(deviceFixture)).getDeviceInfo({deviceId:'BJH02347'}),operateDevice:async(query:{cabinetId:string;slotNum:number;operationType:ManufacturerOperationType})=>{operateCall=query;return {code:0,msg:'success'};}};
+ const battery=await new ManufacturerBatteryEjector(client,repo).ejectBatteryAsync('station-paris');
+ assert.equal(battery,'BAT-M-1');// slot 1 · 4100 mV beats slot 3 · 4050 mV
+ assert.deepEqual(operateCall,{cabinetId:'BJH02347',slotNum:1,operationType:'pop',reason:'BATYEO rental'});
+});
+test('ManufacturerBatteryEjector refuses a station with no manufacturer link, an offline cabinet, or an empty cabinet',async()=>{
+ const unlinked=seedData('unused');const client={getDeviceInfo:async()=>new ManufacturerHttpClient(config,async()=>json(deviceFixture)).getDeviceInfo({deviceId:'x'}),operateDevice:async()=>({code:0,msg:'success'})};
+ await assert.rejects(()=>new ManufacturerBatteryEjector(client,new MemoryRepository(unlinked)).ejectBatteryAsync('station-paris'),(error:unknown)=>error instanceof DomainError&&error.status===503);
+ const offline=seedData('unused');offline.stationProviderLinks.push({id:'link-1',stationId:'station-paris',manufacturer:'BAJIE',externalId:'BJH02347',active:true,createdAt:0,updatedAt:0});
+ const offlineClient={getDeviceInfo:async()=>new ManufacturerHttpClient(config,async()=>json({...deviceFixture,data:{...deviceFixture.data,cabinet:{...deviceFixture.data.cabinet,online:false}}})).getDeviceInfo({deviceId:'BJH02347'}),operateDevice:async()=>({code:0,msg:'success'})};
+ await assert.rejects(()=>new ManufacturerBatteryEjector(offlineClient,new MemoryRepository(offline)).ejectBatteryAsync('station-paris'),(error:unknown)=>error instanceof DomainError&&error.status===503);
+ const empty=seedData('unused');empty.stationProviderLinks.push({id:'link-1',stationId:'station-paris',manufacturer:'BAJIE',externalId:'BJH02347',active:true,createdAt:0,updatedAt:0});
+ const emptyFixture={...deviceFixture,data:{...deviceFixture.data,batteries:[]}};
+ const emptyClient={getDeviceInfo:async()=>new ManufacturerHttpClient(config,async()=>json(emptyFixture)).getDeviceInfo({deviceId:'BJH02347'}),operateDevice:async()=>({code:0,msg:'success'})};
+ await assert.rejects(()=>new ManufacturerBatteryEjector(emptyClient,new MemoryRepository(empty)).ejectBatteryAsync('station-paris'),(error:unknown)=>error instanceof DomainError&&error.status===409);
+});
+test('ManufacturerBatteryEjector treats a confirmed provider error as a definite failure but a timeout as an unknown physical result',async()=>{
+ const data=seedData('unused');data.stationProviderLinks.push({id:'link-1',stationId:'station-paris',manufacturer:'BAJIE',externalId:'BJH02347',active:true,createdAt:0,updatedAt:0});
+ const withDeviceInfo=(operateDevice:()=>Promise<{code:number;msg:string}>)=>({getDeviceInfo:async()=>new ManufacturerHttpClient(config,async()=>json(deviceFixture)).getDeviceInfo({deviceId:'BJH02347'}),operateDevice});
+ const confirmedFailure=withDeviceInfo(async()=>{throw new ManufacturerApiError(1001,'Device offline');});
+ await assert.rejects(()=>new ManufacturerBatteryEjector(confirmedFailure,new MemoryRepository(structuredClone(data))).ejectBatteryAsync('station-paris'),(error:unknown)=>error instanceof ManufacturerApiError&&error.providerCode===1001);
+ const uncertain=withDeviceInfo(async()=>{throw new ManufacturerError('Délai de réponse fabricant dépassé.',504,'TIMEOUT');});
+ await assert.rejects(()=>new ManufacturerBatteryEjector(uncertain,new MemoryRepository(structuredClone(data))).ejectBatteryAsync('station-paris'),(error:unknown)=>error instanceof PhysicalResultUnknownError);
 });
 test('manufacturer device list uses only documented query parameters and maps summaries',async()=>{let called='';const client=new ManufacturerHttpClient(config,async url=>{called=url;return json(listFixture);});const rows=await client.listDevices({coordType:'GCJ-02',zoomLevel:5,lat:22.989442,lng:113.327761,showPrice:true});const url=new URL(called);assert.equal(url.pathname,'/cdb-open-api/v1/rent/cabinet/list');assert.deepEqual([...url.searchParams.keys()],['coordType','zoomLevel','lat','lng','showPrice']);assert.deepEqual(rows,[{shopId:'shop-1',name:'Hôtel Démo',address:'1 rue Démo',latitude:48.8566,longitude:2.3522,batteryCount:2,freeCount:1,informationStatus:'online'}]);});
 test('manufacturer timeout, auth, malformed and unavailable errors are typed',async()=>{const timeoutClient=new ManufacturerHttpClient({...config,timeoutMs:5},async(_url,init)=>new Promise((_resolve,reject)=>init.signal?.addEventListener('abort',()=>reject(new Error('aborted')))));await assert.rejects(()=>timeoutClient.getDeviceInfo({deviceId:'x'}),(error:unknown)=>error instanceof ManufacturerError&&error.kind==='TIMEOUT');for(const [response,kind] of [[new Response('',{status:401}),'AUTH'],[new Response('{',{status:200}),'MALFORMED'],[json({code:0,msg:'ok',data:{}}),'MALFORMED'],[new Response('',{status:503}),'UNAVAILABLE']] as const){const client=new ManufacturerHttpClient(config,async()=>response);await assert.rejects(()=>client.getDeviceInfo({deviceId:'x'}),(error:unknown)=>error instanceof ManufacturerError&&error.kind===kind);}});

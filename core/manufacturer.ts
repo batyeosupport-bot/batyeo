@@ -1,7 +1,8 @@
 import {z} from 'zod';
 import type {Data,Station} from './types';
 import type {BatteryStationProvider} from './providers';
-import {DomainError} from './providers';
+import {DomainError,PhysicalResultUnknownError} from './providers';
+import type {Repository} from './repository';
 
 export const MANUFACTURER_DEFAULT_BASE_URL='https://developer.chargenow.top/cdb-open-api/v1';
 export const MANUFACTURER_DEVICE_INFO_PATH='/rent/cabinet/query';
@@ -97,6 +98,41 @@ export class ManufacturerBatteryStationProvider implements BatteryStationProvide
  setOnline(...args:Parameters<BatteryStationProvider['setOnline']>):void{void args;throw this.physicalBlocked();}
  simulateFailure(...args:Parameters<BatteryStationProvider['simulateFailure']>):void{void args;throw this.physicalBlocked();}
  private physicalBlocked(){return new ManufacturerError('Action physique fabricant interdite en mode READ-ONLY.',403,'PHYSICAL_BLOCKED');}
+}
+
+/**
+ * Concrete AsyncBatteryEjector (core/stripe-coordinator.ts) for real hardware. That interface's
+ * own comment notes ejectBatteryAsync() has no Data access — which rules out picking a slot from
+ * a local snapshot, but not a plain non-transactional repository.read(). This uses that read only
+ * to resolve which physical cabinet backs the station; the slot/battery choice itself always
+ * comes from a fresh cabinet/query, the manufacturer's own live view, never from local state that
+ * could already be stale. Nothing here runs inside a repository transaction.
+ * Still unreachable in production: resolveManufacturerConfig()/ManufacturerHttpClient both refuse
+ * to exist unless MANUFACTURER_ALLOW_PHYSICAL_ACTIONS is exactly 'false', and nothing in server/
+ * constructs this class yet. See docs/EXTERNAL_BLOCKERS.md.
+ */
+export class ManufacturerBatteryEjector {
+ constructor(private readonly client:Pick<ManufacturerHttpClient,'getDeviceInfo'|'operateDevice'>,private readonly repository:Repository){}
+ async ejectBatteryAsync(stationId:string):Promise<string>{
+  const data=await this.repository.read();
+  const link=data.stationProviderLinks.find(row=>row.stationId===stationId&&row.active);
+  const externalId=link?.externalId??data.stations.find(s=>s.id===stationId)?.providerDeviceId;
+  if(!externalId)throw new DomainError('Aucune borne fabricant associée à cette station.',503);
+  const snapshot=await this.client.getDeviceInfo({deviceId:externalId});
+  if(!snapshot.online)throw new DomainError('Borne fabricant hors ligne.',503);
+  const candidates=snapshot.slots.filter((slot):slot is ManufacturerSlotSnapshot&{battery:ManufacturerBatterySnapshot}=>slot.battery!==null);
+  if(!candidates.length)throw new DomainError('Aucune batterie disponible sur cette borne.',409);
+  // Best-charged battery first: a simple, deterministic policy rather than an arbitrary slot order.
+  const chosen=candidates.reduce((best,slot)=>slot.battery.voltage>best.battery.voltage?slot:best);
+  try{await this.client.operateDevice({cabinetId:externalId,slotNum:chosen.position,operationType:'pop',reason:'BATYEO rental'});}
+  catch(error){
+   // A confirmed API error (non-zero code) means the manufacturer told us clearly it failed —
+   // that propagates as-is. Only a timeout/network failure leaves the physical outcome unknown.
+   if(error instanceof ManufacturerError&&(error.kind==='TIMEOUT'||error.kind==='UNAVAILABLE'))throw new PhysicalResultUnknownError(`Éjection fabricant incertaine (borne ${externalId}, slot ${chosen.position}) : ${error.message}`);
+   throw error;
+  }
+  return chosen.battery.id;
+ }
 }
 
 export interface ManufacturerStationDifference {kind:'ONLINE_STATUS'|'AVAILABILITY'|'CAPACITY'|'SLOT_BATTERY';position?:number;local:unknown;provider:unknown;}
