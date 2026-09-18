@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {ManufacturerApiError,ManufacturerBatteryStationProvider,ManufacturerError,ManufacturerHttpClient,applyManufacturerStationTelemetry,reconcileManufacturerStation,resolveManufacturerConfig,validateManufacturerStartup,type ManufacturerTransport} from '../core/manufacturer';
+import {MANUFACTURER_OPERATION_TYPES} from '../core/manufacturer';
 import {MockBatteryStationProvider} from '../core/providers';
 import {seedData} from '../core/seed';
 import {validateData} from '../core/invariants';
@@ -27,6 +28,27 @@ test('a real DTA55480 cabinet/query response, confirmed live on 2026-09-18, pars
  assert.equal(snapshot.shopAddress,'');
  assert.equal(snapshot.cabinetId,'DTA55480');
  assert.equal(snapshot.totalSlots,8);
+});
+test('MANUFACTURER_OPERATION_TYPES matches the 10 values confirmed on the official Apifox docs for cabinet/operation on 2026-09-18',()=>{
+ assert.deepEqual([...MANUFACTURER_OPERATION_TYPES],['restart','pop','popall','popallForNoAuth','popallForAuth','heartbeat','lock','unlock','lockStopCharge','report']);
+});
+test('operateDevice calls the confirmed cabinet/operation endpoint with Basic auth and the documented parameters',async()=>{
+ let request:{url:string;init:RequestInit}|undefined;
+ const transport:ManufacturerTransport=async(url,init)=>{request={url,init};return json({msg:'success',code:0});};
+ const result=await new ManufacturerHttpClient(config,transport).operateDevice({cabinetId:'DTA55480',slotNum:2,operationType:'pop'});
+ const url=new URL(request!.url);
+ assert.equal(url.pathname,'/cdb-open-api/v1/cabinet/operation');
+ assert.equal(url.searchParams.get('cabinetid'),'DTA55480');
+ assert.equal(url.searchParams.get('slotNum'),'2');
+ assert.equal(url.searchParams.get('operationType'),'pop');
+ assert.equal(url.searchParams.get('reason'),'');
+ assert.equal(request!.init.method,'POST');
+ assert.equal((request!.init.headers as Record<string,string>).Authorization,'Basic dXNlcjpwYXNz');
+ assert.equal(result.code,0);
+});
+test('operateDevice surfaces a non-zero response code as a typed provider error, never as success',async()=>{
+ const client=new ManufacturerHttpClient(config,async()=>json({msg:'Device offline',code:1001}));
+ await assert.rejects(()=>client.operateDevice({cabinetId:'DTA55480',slotNum:1,operationType:'pop'}),(error:unknown)=>error instanceof ManufacturerApiError&&error.providerCode===1001);
 });
 test('manufacturer device list uses only documented query parameters and maps summaries',async()=>{let called='';const client=new ManufacturerHttpClient(config,async url=>{called=url;return json(listFixture);});const rows=await client.listDevices({coordType:'GCJ-02',zoomLevel:5,lat:22.989442,lng:113.327761,showPrice:true});const url=new URL(called);assert.equal(url.pathname,'/cdb-open-api/v1/rent/cabinet/list');assert.deepEqual([...url.searchParams.keys()],['coordType','zoomLevel','lat','lng','showPrice']);assert.deepEqual(rows,[{shopId:'shop-1',name:'Hôtel Démo',address:'1 rue Démo',latitude:48.8566,longitude:2.3522,batteryCount:2,freeCount:1,informationStatus:'online'}]);});
 test('manufacturer timeout, auth, malformed and unavailable errors are typed',async()=>{const timeoutClient=new ManufacturerHttpClient({...config,timeoutMs:5},async(_url,init)=>new Promise((_resolve,reject)=>init.signal?.addEventListener('abort',()=>reject(new Error('aborted')))));await assert.rejects(()=>timeoutClient.getDeviceInfo({deviceId:'x'}),(error:unknown)=>error instanceof ManufacturerError&&error.kind==='TIMEOUT');for(const [response,kind] of [[new Response('',{status:401}),'AUTH'],[new Response('{',{status:200}),'MALFORMED'],[json({code:0,msg:'ok',data:{}}),'MALFORMED'],[new Response('',{status:503}),'UNAVAILABLE']] as const){const client=new ManufacturerHttpClient(config,async()=>response);await assert.rejects(()=>client.getDeviceInfo({deviceId:'x'}),(error:unknown)=>error instanceof ManufacturerError&&error.kind===kind);}});

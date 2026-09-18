@@ -6,6 +6,11 @@ import {DomainError} from './providers';
 export const MANUFACTURER_DEFAULT_BASE_URL='https://developer.chargenow.top/cdb-open-api/v1';
 export const MANUFACTURER_DEVICE_INFO_PATH='/rent/cabinet/query';
 export const MANUFACTURER_DEVICE_LIST_PATH='/rent/cabinet/list';
+/** Confirmed 2026-09-18 against the official Apifox docs (not the admin-panel-only cdb-web-api
+ * mirror found earlier): same shape, same operationType values, public and Basic-authenticated. */
+export const MANUFACTURER_DEVICE_OPERATION_PATH='/cabinet/operation';
+export const MANUFACTURER_OPERATION_TYPES=['restart','pop','popall','popallForNoAuth','popallForAuth','heartbeat','lock','unlock','lockStopCharge','report'] as const;
+export type ManufacturerOperationType=typeof MANUFACTURER_OPERATION_TYPES[number];
 
 export class ManufacturerError extends DomainError {constructor(message:string,status=502,public readonly kind:'AUTH'|'TIMEOUT'|'UNAVAILABLE'|'MALFORMED'|'API'|'PHYSICAL_BLOCKED'='UNAVAILABLE'){super(message,status);}}
 export class ManufacturerApiError extends ManufacturerError {constructor(public readonly providerCode:number,message:string){super(message,502,'API');}}
@@ -20,8 +25,12 @@ export interface ManufacturerBatterySnapshot {id:string;slot:number;voltage:numb
 export interface ManufacturerSlotSnapshot {position:number;battery:ManufacturerBatterySnapshot|null;}
 export interface ManufacturerDeviceSnapshot {deviceId:string;cabinetId:string;qrCode:string;online:boolean;totalSlots:number;emptySlots:number;busySlots:number;signal:string;type:string;ip:string;shopId:string;shopName:string;shopAddress:string;latitude:number|null;longitude:number|null;batteries:ManufacturerBatterySnapshot[];slots:ManufacturerSlotSnapshot[];availability:number;lastSeenAt:null;}
 export interface ManufacturerStationSummary {shopId:string;name:string;address:string;latitude:number;longitude:number;batteryCount:number;freeCount:number;informationStatus:string;}
-/** Future domain contract only. No manufacturer write endpoint is implemented or called. */
+/** Future domain contract only. The endpoint behind operateDevice() below is now confirmed
+ * (docs/EXTERNAL_BLOCKERS.md), but nothing in server/ or core/stripe-coordinator.ts calls it yet —
+ * see ManufacturerHttpClient.operateDevice() and MANUFACTURER_ALLOW_PHYSICAL_ACTIONS. */
 export interface ManufacturerPhysicalActions {eject(stationExternalId:string):Promise<void>;ejectSlot(stationExternalId:string,slot:number):Promise<void>;operateDevice(stationExternalId:string,operation:string):Promise<void>;}
+export interface ManufacturerOperationQuery {cabinetId:string;slotNum:number;operationType:ManufacturerOperationType;reason?:string;}
+export interface ManufacturerOperationResult {code:number;msg:string;}
 
 const nonEmpty=z.string().min(1);
 const batterySchema=z.object({slotNum:z.number().int().positive(),vol:z.number(),batteryId:nonEmpty}).passthrough();
@@ -31,6 +40,9 @@ const cabinetSchema=z.object({ip:z.string(),remark:z.string(),type:z.string(),sl
 const shopSchema=z.object({address:z.string().optional().default(''),priceMinute:z.string(),city:z.string(),dailyMaxPrice:z.number(),latitude:z.string(),openingTime:z.string(),freeMinutes:z.number(),icon:z.string(),content:z.string(),province:z.string(),price:z.number(),name:z.string(),deposit:z.number(),logo:z.string(),id:z.string(),region:z.string(),longitude:z.string()}).passthrough();
 const deviceResponseSchema=z.object({msg:z.string(),code:z.number().int(),data:z.object({priceStrategy:z.object({depositAmount:z.number(),priceMinute:z.number(),autoRefund:z.number(),timeoutAmount:z.number(),timeoutDay:z.number(),dailyMaxPrice:z.number(),freeMinutes:z.number(),currencySymbol:z.string(),price:z.number(),name:z.string(),currency:z.string(),shopId:z.string()}).passthrough(),shop:shopSchema,batteries:z.array(batterySchema),cabinet:cabinetSchema}).passthrough()}).passthrough();
 const listItemSchema=z.object({price:z.object({priceId:z.number(),freeDuration:z.string(),price:z.string(),chargeUnit:z.string(),dailyCapAmount:z.string(),deposit:z.string()}).passthrough(),cabinet:z.object({batteryNum:z.string(),freeNum:z.string(),infoStatus:z.string()}).passthrough(),shop:z.object({id:z.string(),shopName:z.string(),shopAddress:z.string(),mobile:z.string(),distance:z.string(),longitude:z.string(),latitude:z.string(),shopBanner:z.string(),shopIcon:z.string(),distanceNumber:z.number(),sceneType:z.string()}).passthrough()}).passthrough();
+// Response documented only as "RestResponse" with a dynamic key object; msg/code match every
+// other endpoint on this API, so code is what's actually checked, exactly like the read endpoints.
+const operationResponseSchema=z.object({msg:z.string(),code:z.number().int()}).passthrough();
 const listResponseSchema=z.object({msg:z.string(),code:z.number().int(),list:z.array(listItemSchema)}).passthrough();
 const parseResponse=<T extends z.ZodTypeAny>(schema:T,value:unknown):z.infer<T>=>{const parsed=schema.safeParse(value);if(!parsed.success)throw new ManufacturerError('Réponse fabricant mal formée.',502,'MALFORMED');return parsed.data;};
 
@@ -47,10 +59,22 @@ export class ManufacturerHttpClient {
   if(!config.username||!config.password)throw new ManufacturerError('Identifiants fabricant manquants.',503,'AUTH');
   const base=new URL(config.baseUrl);if(base.protocol!=='https:'||base.username||base.password)throw new ManufacturerError('L’API fabricant doit utiliser une URL HTTPS sans identifiants.',503,'AUTH');
   this.baseUrl=base.toString().replace(/\/$/,'');this.timeoutMs=config.timeoutMs??8_000;
-  this.endpointAuth=endpointAuth??(path=>{if(![MANUFACTURER_DEVICE_INFO_PATH,MANUFACTURER_DEVICE_LIST_PATH].includes(path))throw new ManufacturerError('Mode d’authentification non documenté pour cet endpoint.',503,'AUTH');return {Authorization:`Basic ${safeBase64(`${config.username}:${config.password}`)}`};});
+  this.endpointAuth=endpointAuth??(path=>{if(![MANUFACTURER_DEVICE_INFO_PATH,MANUFACTURER_DEVICE_LIST_PATH,MANUFACTURER_DEVICE_OPERATION_PATH].includes(path))throw new ManufacturerError('Mode d’authentification non documenté pour cet endpoint.',503,'AUTH');return {Authorization:`Basic ${safeBase64(`${config.username}:${config.password}`)}`};});
  }
  async getDeviceInfo(query:ManufacturerDeviceQuery){const payload=parseResponse(deviceResponseSchema,await this.request('GET',MANUFACTURER_DEVICE_INFO_PATH,{deviceId:query.deviceId}));this.throwProviderError(payload.code,payload.msg,MANUFACTURER_DEVICE_INFO_PATH);return mapDevice(query.deviceId,payload.data);}
  async listDevices(query:ManufacturerListQuery){const payload=parseResponse(listResponseSchema,await this.request('POST',MANUFACTURER_DEVICE_LIST_PATH,{coordType:query.coordType,zoomLevel:String(query.zoomLevel),lat:String(query.lat),lng:String(query.lng),showPrice:String(query.showPrice)}));this.throwProviderError(payload.code,payload.msg,MANUFACTURER_DEVICE_LIST_PATH);return payload.list.map(item=>({shopId:item.shop.id,name:item.shop.shopName,address:item.shop.shopAddress,latitude:finite(item.shop.latitude,'latitude'),longitude:finite(item.shop.longitude,'longitude'),batteryCount:count(item.cabinet.batteryNum,'batteryNum'),freeCount:count(item.cabinet.freeNum,'freeNum'),informationStatus:item.cabinet.infoStatus}));}
+ /**
+  * Confirmed endpoint (docs/EXTERNAL_BLOCKERS.md), not yet called from anywhere in server/ or
+  * core/stripe-coordinator.ts. operationType 'pop' is a real physical action — this method alone
+  * does not bypass MANUFACTURER_ALLOW_PHYSICAL_ACTIONS, which still has to stay false everywhere
+  * that actually drives a rental. Kept close to the documented shape rather than only exposing
+  * 'pop': lock/unlock/restart are the same call and just as undecided about who's allowed to use them.
+  */
+ async operateDevice(query:ManufacturerOperationQuery):Promise<ManufacturerOperationResult>{
+  const payload=parseResponse(operationResponseSchema,await this.request('POST',MANUFACTURER_DEVICE_OPERATION_PATH,{cabinetid:query.cabinetId,slotNum:String(query.slotNum),operationType:query.operationType,reason:query.reason??''}));
+  this.throwProviderError(payload.code,payload.msg,MANUFACTURER_DEVICE_OPERATION_PATH);
+  return payload;
+ }
  private throwProviderError(code:number,msg:string,path:string){if(code!==0){this.logger({level:'warn',event:'manufacturer_api_error',path,providerCode:code});throw new ManufacturerApiError(code,msg||'Erreur API fabricant.');}}
  private async request(method:'GET'|'POST',path:string,params:Record<string,string>){
   const url=new URL(this.baseUrl+path);for(const [key,value] of Object.entries(params))url.searchParams.set(key,value);const controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),this.timeoutMs);
