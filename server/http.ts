@@ -16,7 +16,7 @@ import {checksumConfig} from '../core/runtime-config';
 import {heartbeatHealth} from '../core/heartbeat';
 import {validateTranslations} from '../core/i18n';
 import type {Actor,Data,StationHeartbeatRecord} from '../core/types';
-import {createStation,createVenue,publicQrUrl,setStripeTerminalLocation,blockStationRentals,unblockStationRentals} from '../core/station-admin';
+import {createStation,createVenue,publicQrUrl,setStripeTerminalLocation,blockStationRentals,unblockStationRentals,archiveStation,restoreStation,relocateStation} from '../core/station-admin';
 import {createMedia,setMediaStatus} from '../core/media-admin';
 
 const engine=new RentalEngine();
@@ -119,7 +119,7 @@ async function route(request:Request,path:string){
  if(request.method==='GET'){
   const d=await repository.read();const actor=await actorFor(request,d);
   if(path==='health')return reply({status:'ok',demo:options.demo,providers:{payment:paymentMode,station:'mock',manufacturer:manufacturerProvider?'read_only':'not_configured'},manufacturerHealth:providerHealth(d),serverTime:Date.now()});
-  if(path==='public')return reply({stations:stationViews(d),pricing:d.pricing[0],demo:options.demo});
+  if(path==='public')return reply({stations:stationViews(d).filter(s=>!s.archivedAt),pricing:d.pricing[0],demo:options.demo});
   if(path==='me')return reply({user:actor?{...actor,name:d.users.find(u=>u.id===actor.id)?.name}:null});
   if(path==='customer'){
    const existing=customerToken(request);
@@ -381,6 +381,44 @@ async function route(request:Request,path:string){
    const updated=setStripeTerminalLocation(d,input.stationId,location.id);
    audit(d,current,`Location Stripe Terminal créée et assignée · ${station.publicId} · ${location.id}`);
    return {station:updated,location};
+  }));
+ }
+ if(path==='station/archive'){
+  authorize(actor,'settings');
+  const input=z.object({stationId:id}).strict().parse(body);
+  return reply(await write('settings',(d,current)=>{
+   const target=d.stations.find(s=>s.id===input.stationId);if(!target)throw new DomainError('Station introuvable.',404);
+   assertTenant(current,target.partnerId);
+   const updated=archiveStation(d,input.stationId);
+   audit(d,current,`Station archivée · ${target.publicId}`);
+   return {station:updated};
+  }));
+ }
+ if(path==='station/restore'){
+  authorize(actor,'settings');
+  const input=z.object({stationId:id}).strict().parse(body);
+  return reply(await write('settings',(d,current)=>{
+   const target=d.stations.find(s=>s.id===input.stationId);if(!target)throw new DomainError('Station introuvable.',404);
+   assertTenant(current,target.partnerId);
+   const updated=restoreStation(d,input.stationId);
+   audit(d,current,`Station restaurée · ${target.publicId}`);
+   return {station:updated};
+  }));
+ }
+ if(path==='station/relocate'){
+  authorize(actor,'settings');
+  const input=z.object({stationId:id,venueId:id}).strict().parse(body);
+  return reply(await write('settings',(d,current)=>{
+   const target=d.stations.find(s=>s.id===input.stationId);if(!target)throw new DomainError('Station introuvable.',404);
+   assertTenant(current,target.partnerId);
+   const venue=d.venues.find(v=>v.id===input.venueId);if(!venue)throw new DomainError('Établissement introuvable.',404);
+   // Handing hardware to a different client is a platform-level call, not something a partner
+   // grants itself — moving between two of one's own venues stays a plain 'settings' action.
+   if(venue.partnerId!==target.partnerId&&!['SUPER_ADMIN','ADMIN'].includes(current.role))throw new DomainError('Seul le personnel BATYEO peut transférer une borne à un autre partenaire.',403);
+   const previousVenue=d.venues.find(v=>v.id===target.venueId)?.name??target.venueId;
+   const updated=relocateStation(d,input.stationId,input.venueId);
+   audit(d,current,`Station déplacée · ${target.publicId} · ${previousVenue} → ${venue.name}`);
+   return {station:updated};
   }));
  }
  if(path==='station/block-rentals'){

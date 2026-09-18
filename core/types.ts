@@ -10,7 +10,7 @@ export interface User { id:string; email:string; name:string; role:Role; partner
 export interface Partner { id:string; name:string; city:string; commissionBps:number; }
 export interface Venue { id:string; partnerId:string; name:string; city:string; address:string; category:string; hours:string; latitude?:number|null; longitude?:number|null; }
 export type FailureMode = 'none'|'ejection'|'timeout'|'payment';
-export interface Station { id:string; publicId:string; venueId:string; partnerId:string; online:boolean; failure:FailureMode; capacity:number; provider?:'mock'|'manufacturer'; providerDeviceId?:string|null; providerStatus?:string|null; providerLastSyncedAt?:number|null; lastSeenAt?:number|null; stripeTerminalLocationId?:string|null; stripeTerminalLocationUpdatedAt?:number|null; rentalsBlocked?:boolean; rentalsBlockedReason?:string|null; rentalsBlockedAt?:number|null; }
+export interface Station { id:string; publicId:string; venueId:string; partnerId:string; online:boolean; failure:FailureMode; capacity:number; provider?:'mock'|'manufacturer'; providerDeviceId?:string|null; providerStatus?:string|null; providerLastSyncedAt?:number|null; lastSeenAt?:number|null; stripeTerminalLocationId?:string|null; stripeTerminalLocationUpdatedAt?:number|null; rentalsBlocked?:boolean; rentalsBlockedReason?:string|null; rentalsBlockedAt?:number|null; archivedAt?:number|null; }
 export interface Battery { id:string; charge:number; status:'AVAILABLE'|'RENTED'|'MAINTENANCE'|'LOST'; }
 export interface Slot { id:string; stationId:string; batteryId:string|null; position:number; }
 export const PAYMENT_STATES = ['PENDING','AUTHORIZING','AUTHORIZED','CAPTURING','CAPTURED','RELEASING','RELEASED','FAILED','UNKNOWN'] as const;

@@ -119,6 +119,7 @@ model Station {
   rentalsBlocked Boolean @default(false)
   rentalsBlockedReason String?
   rentalsBlockedAt DateTime?
+  archivedAt DateTime?
   venue         Venue @relation(fields: [venueId, partnerId], references: [id, partnerId])
   slots         Slot[]
   departures    Rental[] @relation("departure")
