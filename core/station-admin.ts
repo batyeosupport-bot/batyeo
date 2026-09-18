@@ -74,14 +74,36 @@ export function setPartnerCommission(d:Data,partnerId:string,commissionBps:numbe
  if(commissionBps!==null&&(!Number.isSafeInteger(commissionBps)||commissionBps<0||commissionBps>10_000))throw new DomainError('Taux de commission invalide.',400);
  partner.commissionBps=commissionBps;return partner;
 }
-export interface CreateVenueInput {partnerId:string;name:string;city:string;address:string;category:string;hours:string;latitude?:number|null;longitude?:number|null;}
-export function createVenue(d:Data,input:CreateVenueInput):Venue {
+export interface VenueFields {name:string;city:string;address:string;category:string;hours:string;latitude?:number|null;longitude?:number|null;}
+export interface CreateVenueInput extends VenueFields {partnerId:string;}
+/** Mêmes règles à la création et à la correction : une fiche valide ne doit pas dépendre de la porte par laquelle elle est entrée. */
+function venueFields(input:VenueFields):Omit<Venue,'id'|'partnerId'> {
  if(!input.name.trim()||input.name.length>120)throw new DomainError('Nom d’établissement invalide.',400);
  if(!input.city.trim()||input.city.length>80)throw new DomainError('Ville invalide.',400);
  if(!input.address.trim()||input.address.length>200)throw new DomainError('Adresse invalide.',400);
- if(!d.partners.some(p=>p.id===input.partnerId))throw new DomainError('Partenaire invalide.',404);
  if(input.latitude!=null&&(input.latitude<-90||input.latitude>90))throw new DomainError('Latitude invalide.',400);
  if(input.longitude!=null&&(input.longitude<-180||input.longitude>180))throw new DomainError('Longitude invalide.',400);
- const venue:Venue={id:crypto.randomUUID(),partnerId:input.partnerId,name:input.name.trim(),city:input.city.trim(),address:input.address.trim(),category:input.category.trim()||'Établissement',hours:input.hours.trim()||'Non renseigné',latitude:input.latitude??null,longitude:input.longitude??null};
+ return {name:input.name.trim(),city:input.city.trim(),address:input.address.trim(),category:input.category.trim()||'Établissement',hours:input.hours.trim()||'Non renseigné',latitude:input.latitude??null,longitude:input.longitude??null};
+}
+export function createVenue(d:Data,input:CreateVenueInput):Venue {
+ const fields=venueFields(input);
+ if(!d.partners.some(p=>p.id===input.partnerId))throw new DomainError('Partenaire invalide.',404);
+ const venue:Venue={id:crypto.randomUUID(),partnerId:input.partnerId,...fields};
  d.venues.push(venue);return venue;
+}
+/**
+ * Corrige la fiche d’un établissement. Le partenaire n’est pas modifiable ici : changer de
+ * partenaire est un transfert commercial, qui passe borne par borne par relocateStation.
+ * Si l’adresse ou la ville change, la Location Stripe des bornes du lieu est effacée, pour la
+ * raison qui vaut déjà dans relocateStation : une Location nomme une adresse physique, et ce
+ * n’est plus la bonne. Un opérateur doit en réassigner une, plutôt que de laisser un lecteur
+ * de carte rattaché en silence à l’ancienne.
+ */
+export function updateVenue(d:Data,venueId:string,input:VenueFields,now=Date.now()):Venue {
+ const venue=d.venues.find(v=>v.id===venueId);if(!venue)throw new DomainError('Établissement introuvable.',404);
+ const fields=venueFields(input);
+ const moved=fields.address!==venue.address||fields.city!==venue.city;
+ Object.assign(venue,fields);
+ if(moved)for(const s of d.stations.filter(s=>s.venueId===venue.id&&s.stripeTerminalLocationId)){s.stripeTerminalLocationId=null;s.stripeTerminalLocationUpdatedAt=now;}
+ return venue;
 }
