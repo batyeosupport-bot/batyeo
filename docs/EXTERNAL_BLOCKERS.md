@@ -92,6 +92,20 @@ Correction 2026-09-18 (plus tard dans la journée) : `server/http.ts` a en fait 
 - `Station.rentalsBlocked` : un interrupteur de maintenance côté serveur BATYEO (`station/block-rentals`, `station/unblock-rentals`), indépendant de tout `No Lease` fabricant. `RentalEngine.create` le respecte.
 - **Non implémenté volontairement** : la télémétrie enrichie vue dans le panneau admin (température batterie, type de câble, versions firmware, historique fin de connectivité) n'est **pas** ajoutée à `ManufacturerBatterySnapshot`/`StationProviderSnapshot`, car ces champs viennent de `cdb-web-api` (panneau interne) et n'ont aucune confirmation d'existence sur `cdb-open-api` (le contrat public documenté). Les ajouter maintenant reviendrait à deviner un contrat non confirmé — voir la règle déjà en vigueur plus haut dans ce document.
 
+## Sélection de slot/batterie pour l'éjection réelle — implémentée le 2026-09-18
+
+`core/manufacturer.ts` a maintenant `ManufacturerBatteryEjector`, une implémentation concrète d'`AsyncBatteryEjector` (`core/stripe-coordinator.ts`). Le choix du slot/batterie à cibler vient d'une relecture `cabinet/query` fraîche au moment de l'appel (jamais d'un `Data` local potentiellement périmé) : batterie la mieux chargée parmi les slots occupés, puis `operateDevice(operationType:'pop')` sur ce slot précis. Une erreur réseau (timeout/indisponibilité) pendant l'éjection devient un `PhysicalResultUnknownError` plutôt qu'un échec supposé ; une erreur fabricant confirmée (code non nul) reste une vraie erreur.
+
+**Non branché** : rien dans `server/http.ts` ne construit cette classe — `StripeRentalCoordinator` est toujours instancié sans éjecteur, donc aucune location réelle ne peut déclencher une éjection physique, décision délibérée distincte de la simple existence de la classe. Vérifié uniquement par tests unitaires (mocks), jamais contre la borne réelle.
+
+## Bug de parsing corrigé le 2026-09-18 : une vraie erreur fabricant remontait comme "malformée"
+
+En relançant une vérification read-only réelle contre `DTA55480` avec les identifiants Open API, la borne a répondu `{"msg":"Device not online.","code":2004}` — **sans champ `data` du tout**. `getDeviceInfo()`/`listDevices()` validaient tout le payload de succès (avec `data`/`list` requis) avant même de regarder le `code` de la réponse, donc toute vraie erreur fabricant sans `data`/`list` devenait une "réponse fabricant mal formée" (502 MALFORMED) au lieu de son vrai code/message. Le test existant sur le code 2002 ne l'avait jamais détecté : sa fixture gardait `data` présent par confort, une forme qui ne correspond pas à ce que l'API renvoie réellement sur erreur.
+
+Corrigé : un envelope léger (`{code, msg}`) est validé et le code inspecté en premier ; le schéma strict complet ne s'applique qu'une fois `code===0` confirmé. Re-vérifié contre l'API réelle après le correctif : le message exact du fabricant remonte maintenant correctement.
+
+**Découverte accessoire, à signaler côté produit plutôt que côté code** : la borne physique `DTA55480` est actuellement rapportée hors ligne par l'API du fabricant (`code:2004`, `Device not online.`) — donc aucune synchronisation réelle de données n'a pu être effectuée vers la base staging aujourd'hui, ce n'est pas un problème d'identifiants ni de code.
+
 ## Cas BJH02347
 
 La réponse historiquement observée `code: 2002`, message `QR code unbound device.` est conservée comme erreur fournisseur typée avec son code et son message. BATYEO ne lui attribue aucune signification opérationnelle définitive sans confirmation documentaire.
