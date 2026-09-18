@@ -8,7 +8,7 @@
 - **`GET /rent/cabinet/query?deviceId=DTA55480`** répond avec des données réelles (`code:0`), parsées avec succès par `core/manufacturer.ts` **après un correctif** : `shop.address` est absent du payload réel quand non renseigné (pas une chaîne vide, contrairement à `city`/`openingTime`/`icon` dans le même objet) — le schéma Zod l'accepte désormais en optionnel. Fixture de régression capturée dans `tests/manufacturer.test.ts`.
 - **`POST /rent/cabinet/list`** répond aussi `code:0` (liste vide pour les coordonnées de test utilisées — pas une erreur, juste aucun résultat pour cette recherche géographique).
 - Juste après l'activation du compte par le fabricant, un premier appel a renvoyé `{"msg":"The record already exists in the database.","code":800}` sur **tous** les appels (query et list, quels que soient les paramètres) — a priori un délai de propagation côté leur provisioning. Un nouvel essai quelques minutes plus tard a fonctionné. À garder en tête si ça se reproduit : ce n'est pas un problème de paramètres de notre côté.
-- Toujours **non confirmé** : la commande d'éjection sur l'Open API (voir section dédiée plus bas) — c'est la seule vraie inconnue technique restante.
+- **Commande d'éjection confirmée sur l'Open API publique** (voir section dédiée plus bas) — plus une inconnue technique.
 
 Sources officielles :
 
@@ -40,21 +40,24 @@ Sources officielles :
 - `pnpm manufacturer:check` est prêt pour un environnement staging : il exécute uniquement `cabinet/query` puis `cabinet/list`, affiche des métriques anonymisées et peut capturer des fixtures dépersonnalisées avec `MANUFACTURER_CAPTURE_FIXTURE=true` et `MANUFACTURER_FIXTURE_PATH=/chemin/fixtures`.
 - Le scheduler appelle `POST /api/core/internal/manufacturer/sync` avec `Authorization: Bearer $MANUFACTURER_SYNC_SECRET`. Le verrou est enregistré dans `ManufacturerSyncRun` et expire après dix minutes pour permettre la récupération d’un worker interrompu.
 
-## Commande d'éjection — piste trouvée le 2026-09-18, encore à confirmer
+## Commande d'éjection — confirmée le 2026-09-18 sur l'Open API publique
 
-En inspectant le panneau admin marchand (`admin.chargenow.top/web-new/`, compte propriétaire du projet), une action « Eject »/« Eject all battery » existe réellement sur la fiche d'une borne (onglet Slot). Le bundle JS de ce panneau montre l'appel réseau exact :
+D'abord repérée en inspectant le panneau admin marchand (`admin.chargenow.top/web-new/`), qui appelle en interne `GET /cdb-web-api/v1/cdb/cabinet/operation?cId=...&operationType=pop&kakou=...` pour éjecter une batterie. Cette API interne (session humaine + captcha) est distincte de l'Open API publique — la question posée au fabricant était de savoir si un équivalent existait côté Open API.
+
+**Réponse du fabricant (Tony, 2026-09-18)** : confirmé via la documentation officielle Apifox (https://s.apifox.cn/4855b8fe-4c43-48f6-8bd6-37cc29b98fe5/api-104222009), endpoint **« Device Operation »** :
 
 ```
-GET https://admin.chargenow.top/cdb-web-api/v1/cdb/cabinet/operation
-    ?cId=<cabinetId>&operationType=pop&kakou=<numéro de slot>
+POST https://developer.chargenow.top/cdb-open-api/v1/cabinet/operation
+Authorization: Basic <username:password>
+Query params : cabinetid (requis), slotNum (requis), operationType (requis), reason,
+               batcabFault, batteryFault, type, gpsTime (optionnels)
 ```
-(`operationType=popall` / `popallForAuth` / `popallForNoAuth` pour éjecter tout le caisson d'un coup ; `operationType=unlock` existe aussi, utilisé par l'action de déblocage manuel.)
 
-**Ce que ça confirme** : une commande d'éjection existe bien côté fabricant, au niveau firmware/backend — ce n'était pas garanti avant cette vérification.
+`operationType` documenté : `restart, pop, popall, popallForNoAuth, popallForAuth, heartbeat, lock, unlock, lockStopCharge, report` — quasi identique à ce qui avait été repéré dans le panneau admin (differences : `lockStopCharge` documenté ici mais pas vu côté panneau ; `trunoff` vu côté panneau mais absent de cette doc). Implémenté dans `ManufacturerHttpClient.operateDevice()` (`core/manufacturer.ts`), testé contre ce contrat exact (`tests/manufacturer.test.ts`). **Jamais appelé depuis `server/` ou `core/stripe-coordinator.ts`** — `MANUFACTURER_ALLOW_PHYSICAL_ACTIONS` reste `false`, et aucune commande n'a été envoyée à la borne réelle pendant cette session, y compris les moins risquées (`heartbeat`, `report`).
 
-**Ce que ça ne confirme pas** : ce endpoint vit sous `cdb-web-api` (l'API interne du panneau web, authentifiée par session de connexion humaine + captcha), pas sous `cdb-open-api` (l'API publique documentée que le serveur BATYEO est censé appeler avec les credentials marchand Basic/OAuth2). Rien ne garantit que ce même `operationType=pop` est exposé côté `cdb-open-api`, ni sous quelle authentification. C'est précisément la question à poser au fabricant, de façon nettement plus précise qu'avant : *« Le panneau admin appelle `GET /cdb-web-api/v1/cdb/cabinet/operation?operationType=pop` pour éjecter une batterie — un équivalent existe-t-il sur l'Open API publique, avec quelle authentification ? »*
+Le fabricant documente aussi un endpoint distinct **« Rent and eject the battery for the specified device slot »** et un cycle `Create Rent Order` / `Query Rent Order Status` / `Mark order status as completed` — un flux de location complet côté ChargeNow. Choix délibéré : ne pas l'utiliser. BATYEO veut rester la seule source de vérité pour ses locations (voir question de désactivation du flux natif ci-dessous) ; `cabinet/operation` pilote la borne directement sans créer de commande dans le système du fabricant.
 
-Aucune tentative d'éjection réelle n'a été faite pendant cette vérification (le bouton n'a jamais été cliqué) — `MANUFACTURER_ALLOW_PHYSICAL_ACTIONS` reste `false` et cette découverte ne le change pas.
+Reste à concevoir avant toute implémentation réelle du flux de location (pas juste le contrat bas niveau) : **quel slot/quelle batterie cibler** au moment d'appeler `operateDevice` — `AsyncBatteryEjector.ejectBatteryAsync()` n'a explicitement pas accès à `Data` (voir son commentaire dans `core/stripe-coordinator.ts`), donc ce choix ne peut pas se faire par une simple lecture locale au moment de l'appel.
 
 ## Préparé côté BATYEO en attendant, sans rien deviner sur le contrat fabricant
 
@@ -71,7 +74,7 @@ La réponse historiquement observée `code: 2002`, message `QR code unbound devi
 
 - ~~Credentials OpenAccount/Bajie valides pour l'Open API~~ — obtenus et confirmés fonctionnels le 2026-09-18.
 - ~~Confirmation Basic versus OAuth2/Bearer pour les routes cabinet~~ — confirmé : Basic.
-- Équivalent `operationType=pop` de `cdb-web-api` confirmé (ou non) sur `cdb-open-api`, avec son authentification — seul point technique encore ouvert, voir section dédiée plus haut.
+- ~~Équivalent `operationType=pop` de `cdb-web-api` confirmé (ou non) sur `cdb-open-api`~~ — confirmé le 2026-09-18, voir section dédiée plus haut.
 - ~~Fixtures réelles anonymisées pour valider les champs optionnels et unités~~ — une fixture réelle capturée et intégrée en test de régression (`shop.address` absent).
 - Désactivation du flux de location natif du fabricant (prix/caution/QR propres à ChargeNow, vus dans le panneau admin) pour ce compte marchand — question posée, réponse en attente.
 - Autorisation explicite séparée avant toute future commande physique. `MANUFACTURER_ALLOW_PHYSICAL_ACTIONS=false` reste obligatoire dans cette phase.
