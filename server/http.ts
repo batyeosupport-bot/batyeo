@@ -5,7 +5,7 @@ import type {Repository} from '../core/repository';
 import {actorFor,actorForDigest,actorForUser,cookie,customerToken,setCookie,sha256,createPasswordHash,verifyPassword,rateLimit,verifyOrigin,requireCustomer,SESSION_LIFETIME_MS,CUSTOMER_LIFETIME_MS,CUSTOMER_HANDOFF_LIFETIME_MS} from '../core/security';
 import {RentalEngine,authorize,assertTenant,OPEN_STATES,overdueLossEligible} from '../core/rental';
 import {DomainError,MockBatteryStationProvider} from '../core/providers';
-import {verifyStripeSignature,StripePaymentProvider,createTerminalConnectionToken} from '../core/stripe';
+import {verifyStripeSignature,StripePaymentProvider,createTerminalConnectionToken,createTerminalLocation,listTerminalLocations} from '../core/stripe';
 import {StripeRentalCoordinator,type AsyncBatteryEjector} from '../core/stripe-coordinator';
 import {resolvePaymentMode} from '../core/payment-mode';
 import {ManufacturerBatteryEjector,ManufacturerBatteryStationProvider,ManufacturerHttpClient,reconcileManufacturerStation,resolveManufacturerConfig,validateManufacturerStartup} from '../core/manufacturer';
@@ -137,6 +137,9 @@ async function route(request:Request,path:string){
   }
   if(path==='dashboard'){authorize(actor,'read');if(d.rentals.some(r=>r.state==='ACTIVE'&&r.deadline!==null&&Date.now()+r.simulatedMinutes*60000>r.deadline)){await repository.transaction(next=>engine.refreshOverdue(next));return reply(dashboard(await repository.read(),actor!));}return reply(dashboard(d,actor!));}
   if(path==='manufacturer/stations'){authorize(actor,'operate');if(!manufacturerProvider)throw new DomainError('Provider fabricant non configuré.',503);const search=new URL(request.url).searchParams;const query=z.object({coordType:z.string().min(1).max(30),zoomLevel:z.coerce.number().int(),lat:z.coerce.number().finite(),lng:z.coerce.number().finite(),showPrice:z.enum(['true','false']).transform(value=>value==='true')}).parse(Object.fromEntries(search));return reply({stations:await manufacturerProvider.listDevices(query)});}
+  // Read of the merchant's own Stripe account, so an operator can reuse a Location it already has
+  // — including one created earlier from the manufacturer's platform — instead of duplicating it.
+  if(path==='stripe/terminal-locations'){authorize(actor,'settings');if(paymentMode!=='stripe_test')throw new DomainError('Stripe TEST n’est pas configuré sur ce serveur.',503);return reply({locations:await listTerminalLocations(process.env.STRIPE_SECRET_KEY!)});}
   if(path.startsWith('manufacturer/stations/')){authorize(actor,'read');if(!manufacturerProvider)throw new DomainError('Provider fabricant non configuré.',503);const local=d.stations.find(s=>s.id===path.split('/')[2]||s.publicId===path.split('/')[2]);if(!local)throw new DomainError('Station introuvable.',404);assertTenant(actor!,local.partnerId);const link=d.stationProviderLinks.find(row=>row.stationId===local.id&&row.active),externalId=link?.externalId??local.providerDeviceId;if(!externalId)throw new DomainError('Identifiant fabricant non configuré pour cette station.',409);const snapshot=await manufacturerProvider.getDeviceInfo(externalId);return reply({station:snapshot,differences:reconcileManufacturerStation(d,local,snapshot)});}
   if(path.startsWith('rentals/')){
    authorize(actor,'read');const r=d.rentals.find(r=>r.id===path.split('/')[1]);if(!r)throw new DomainError('Location introuvable.',404);assertTenant(actor!,r.partnerId);return reply(rentalView(d,r,canViewFinance(actor!)));
@@ -350,6 +353,24 @@ async function route(request:Request,path:string){
    const updated=setStripeTerminalLocation(d,input.stationId,input.locationId?.trim()||null);
    audit(d,current,`Location Stripe Terminal assignée · ${station.publicId}`);
    return {station:updated};
+  }));
+ }
+ if(path==='station/stripe-location/create'){
+  // One action instead of a round trip through the Stripe dashboard: create the Location in the
+  // merchant's own account from the venue it belongs to, then assign it to the station.
+  authorize(actor,'settings');if(paymentMode!=='stripe_test')throw new DomainError('Stripe TEST n’est pas configuré sur ce serveur.',503);
+  const input=z.object({stationId:id,country:z.string().trim().length(2),postalCode:z.string().trim().max(20).optional(),state:z.string().trim().max(100).optional(),displayName:z.string().trim().min(1).max(120).optional()}).strict().parse(body);
+  const source=await repository.read();const target=source.stations.find(s=>s.id===input.stationId);if(!target)throw new DomainError('Station introuvable.',404);
+  assertTenant(actor!,target.partnerId);
+  const venue=source.venues.find(v=>v.id===target.venueId);if(!venue)throw new DomainError('Établissement introuvable.',404);
+  // Created before the commit: a Stripe object must never be produced inside a transaction.
+  const location=await createTerminalLocation(process.env.STRIPE_SECRET_KEY!,{displayName:input.displayName??`${venue.name} · ${target.publicId}`,line1:venue.address,city:venue.city,country:input.country,postalCode:input.postalCode,state:input.state});
+  return reply(await write('settings',(d,current)=>{
+   const station=d.stations.find(s=>s.id===input.stationId);if(!station)throw new DomainError('Station introuvable.',404);
+   assertTenant(current,station.partnerId);
+   const updated=setStripeTerminalLocation(d,input.stationId,location.id);
+   audit(d,current,`Location Stripe Terminal créée et assignée · ${station.publicId} · ${location.id}`);
+   return {station:updated,location};
   }));
  }
  if(path==='station/block-rentals'){

@@ -97,6 +97,7 @@ function StripeTerminalLocations({data,refresh}:{data:Dashboard;refresh:()=>Prom
   <DataTable rows={data.stations} searchText={s=>s.venue.name+' '+s.publicId} placeholder="Rechercher une borne…" columns={[
    {key:'venue',label:'BORNE',render:s=><div className="table-venue">{s.venue.name}<span>{s.publicId}</span></div>,sort:s=>s.venue.name},
    {key:'location',label:'LOCATION STRIPE',render:s=><StripeLocationCell station={s} refresh={refresh}/>},
+   {key:'stripe',label:'',render:s=><StripeLocationAction station={s} refresh={refresh}/>},
   ]}/>
  </section>;
 }
@@ -109,6 +110,37 @@ function StripeLocationCell({station,refresh}:{station:Dashboard['stations'][num
   await refresh();toast.success('Location Stripe assignée.');
  }catch(e){toast.error(e instanceof Error?e.message:'Assignation impossible.');}finally{setBusy(false);}}
  return <div style={{display:'flex',gap:8,alignItems:'center'}}><Input value={value} maxLength={255} placeholder="tml_…" onChange={e=>setValue(e.target.value)}/><Button size="sm" variant="outline" disabled={busy||!changed} onClick={()=>void save()}>{busy&&<Busy/>}Assigner</Button></div>;
+}
+/**
+ * Creating a Location is a plain Stripe API call on the merchant's own account, so BATYEO makes it
+ * here rather than sending an operator to the Stripe dashboard to copy an id back by hand. Existing
+ * Locations are listed first: an account often already has one for the same address.
+ */
+function StripeLocationAction({station,refresh}:{station:Dashboard['stations'][number];refresh:()=>Promise<void>}){
+ const [locations,setLocations]=useState<{id:string;displayName:string;line1:string;city:string;country:string}[]|null>(null);
+ const [error,setError]=useState('');
+ const [country,setCountry]=useState('FR'),[postalCode,setPostalCode]=useState(''),[state,setState]=useState('');
+ const [busy,setBusy]=useState(false);
+ async function load(){setError('');setLocations(null);try{const r=await api<{locations:typeof locations}>('stripe/terminal-locations');setLocations(r.locations??[]);}catch(e){setError(e instanceof Error?e.message:'Lecture Stripe impossible.');}}
+ async function run(action:()=>Promise<unknown>,success:string){setBusy(true);try{await action();await refresh();toast.success(success);}catch(e){toast.error(e instanceof Error?e.message:'Opération impossible.');}finally{setBusy(false);}}
+ return <Dialog onOpenChange={open=>{if(open)void load();}}><DialogTrigger asChild><Button size="sm" variant="outline">Stripe</Button></DialogTrigger><DialogContent>
+  <DialogHeader><DialogTitle>Location Stripe Terminal</DialogTitle><DialogDescription>{station.venue.name} · {station.publicId}</DialogDescription></DialogHeader>
+  {error&&<p className="form-error">{error}</p>}
+  {locations===null&&!error&&<p><Busy/> Lecture du compte Stripe…</p>}
+  {locations?.length===0&&<p>Aucune Location dans ce compte Stripe pour l’instant.</p>}
+  {locations&&locations.length>0&&<div className="sim-buttons" style={{flexDirection:'column',alignItems:'stretch',gap:6}}>
+   {locations.map(row=><Button key={row.id} variant="outline" disabled={busy||row.id===station.stripeTerminalLocationId} onClick={()=>void run(()=>api('station/stripe-location',{stationId:station.id,locationId:row.id}),'Location assignée.')}>
+    {row.displayName||row.id} · {[row.line1,row.city,row.country].filter(Boolean).join(', ')}{row.id===station.stripeTerminalLocationId?' · assignée':''}
+   </Button>)}
+  </div>}
+  <label className="field-label">Créer une nouvelle Location à l’adresse de cette borne</label>
+  <div style={{display:'flex',gap:8}}>
+   <Input value={country} maxLength={2} placeholder="Pays (FR)" onChange={e=>setCountry(e.target.value)}/>
+   <Input value={postalCode} maxLength={20} placeholder="Code postal" onChange={e=>setPostalCode(e.target.value)}/>
+   <Input value={state} maxLength={100} placeholder="Région (optionnel)" onChange={e=>setState(e.target.value)}/>
+  </div>
+  <Button disabled={busy||country.trim().length!==2} onClick={()=>void run(()=>api('station/stripe-location/create',{stationId:station.id,country:country.trim(),postalCode:postalCode.trim()||undefined,state:state.trim()||undefined}),'Location créée et assignée.')}>{busy&&<Busy/>}Créer dans Stripe et assigner</Button>
+ </DialogContent></Dialog>;
 }
 /** Live state of the physical fleet: what each station's runtime last reported. */
 function RuntimeFleet({data,refresh}:{data:Dashboard;refresh:()=>Promise<void>}){
