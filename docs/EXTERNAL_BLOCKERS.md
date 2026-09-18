@@ -1,6 +1,14 @@
 # Intégration Bajie / ChargeNow — points externes à confirmer
 
-État : adapter **READ-ONLY** implémenté sur la documentation publique consultée le 12 septembre 2026.
+État : adapter **READ-ONLY** implémenté sur la documentation publique consultée le 12 septembre 2026, **confirmé en conditions réelles le 18 septembre 2026** contre la borne `DTA55480` avec des credentials marchand valides.
+
+## Confirmé le 2026-09-18 contre l'Open API réelle
+
+- **Authentification HTTP Basic fonctionne** en production avec les credentials marchand fournis par le fabricant (`username`/`password`). L'ambiguïté Basic vs OAuth2/Bearer citée plus bas est donc résolue côté `cabinet/query` et `cabinet/list` : c'est Basic.
+- **`GET /rent/cabinet/query?deviceId=DTA55480`** répond avec des données réelles (`code:0`), parsées avec succès par `core/manufacturer.ts` **après un correctif** : `shop.address` est absent du payload réel quand non renseigné (pas une chaîne vide, contrairement à `city`/`openingTime`/`icon` dans le même objet) — le schéma Zod l'accepte désormais en optionnel. Fixture de régression capturée dans `tests/manufacturer.test.ts`.
+- **`POST /rent/cabinet/list`** répond aussi `code:0` (liste vide pour les coordonnées de test utilisées — pas une erreur, juste aucun résultat pour cette recherche géographique).
+- Juste après l'activation du compte par le fabricant, un premier appel a renvoyé `{"msg":"The record already exists in the database.","code":800}` sur **tous** les appels (query et list, quels que soient les paramètres) — a priori un délai de propagation côté leur provisioning. Un nouvel essai quelques minutes plus tard a fonctionné. À garder en tête si ça se reproduit : ce n'est pas un problème de paramètres de notre côté.
+- Toujours **non confirmé** : la commande d'éjection sur l'Open API (voir section dédiée plus bas) — c'est la seule vraie inconnue technique restante.
 
 Sources officielles :
 
@@ -61,8 +69,9 @@ La réponse historiquement observée `code: 2002`, message `QR code unbound devi
 
 ## Vérification externe restante
 
-- Credentials OpenAccount/Bajie valides pour l'Open API (distincts du compte de connexion au panneau admin web).
-- Confirmation Basic versus OAuth2/Bearer pour les routes cabinet.
-- Équivalent `operationType=pop` de `cdb-web-api` confirmé (ou non) sur `cdb-open-api`, avec son authentification — voir section ci-dessus.
-- Fixtures réelles anonymisées pour valider les champs optionnels et unités.
+- ~~Credentials OpenAccount/Bajie valides pour l'Open API~~ — obtenus et confirmés fonctionnels le 2026-09-18.
+- ~~Confirmation Basic versus OAuth2/Bearer pour les routes cabinet~~ — confirmé : Basic.
+- Équivalent `operationType=pop` de `cdb-web-api` confirmé (ou non) sur `cdb-open-api`, avec son authentification — seul point technique encore ouvert, voir section dédiée plus haut.
+- ~~Fixtures réelles anonymisées pour valider les champs optionnels et unités~~ — une fixture réelle capturée et intégrée en test de régression (`shop.address` absent).
+- Désactivation du flux de location natif du fabricant (prix/caution/QR propres à ChargeNow, vus dans le panneau admin) pour ce compte marchand — question posée, réponse en attente.
 - Autorisation explicite séparée avant toute future commande physique. `MANUFACTURER_ALLOW_PHYSICAL_ACTIONS=false` reste obligatoire dans cette phase.
