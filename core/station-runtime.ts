@@ -5,7 +5,7 @@ import {applyRuntimeConfig, validateRuntimeConfig, type RuntimeConfigEnvelope} f
 
 export const STATION_RUNTIME_STATES=['IDLE','READY','SCAN_QR','SELECT_INFO','PAYMENT_PENDING','EJECTING','SUCCESS','ERROR','OFFLINE','MAINTENANCE','NO_BATTERY'] as const;
 export type StationRuntimeState=typeof STATION_RUNTIME_STATES[number];
-export interface StationDisplayConfig {version:number;venueName:string;locale:string;idleContent:string;supportContact:string;maintenanceBanner:string|null;refreshIntervalMs:number;featureFlags:Record<string,boolean>;advertisingSlots:readonly string[];playlist?:Playlist|null;translations?:RuntimeTranslations|null;}
+export interface StationDisplayConfig {version:number;venueName:string;locale:string;idleContent:string;supportContact:string;maintenanceBanner:string|null;refreshIntervalMs:number;featureFlags:Record<string,boolean>;advertisingSlots:readonly string[];playlist?:Playlist|null;translations?:RuntimeTranslations|null;stripeTerminalLocationId?:string|null;}
 /** Per-station display configuration owned by the admin portal. `updatedAt` doubles as the monotonic config version pushed to runtimes. */
 export interface StationDisplayConfigRecord {id:string;stationId:string;idleContent:string;supportContact:string;maintenanceBanner:string|null;locale:string;refreshIntervalMs:number;featureFlags:Record<string,boolean>;translations:RuntimeTranslations|null;updatedAt:number;}
 export interface StationPublicSnapshot {stationId:string;publicId:string;venueName:string;online:boolean;availableBatteries:number;capacity:number;hourlyCents:number;capCents:number;depositCents:number;qrTarget:string;providerHealth:ProviderHealth;}

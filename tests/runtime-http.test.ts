@@ -187,3 +187,19 @@ test('a non-operator cannot issue enrollment tokens or manage runtime credential
  assert.equal((await call(repo,'runtime/enrollment-token',{stationId:repo.data.stations[0].id},{cookie:`batyeo_session=${token}`})).status,403);
  assert.equal((await call(repo,'runtime/revoke',{runtimeId:'anything'},{cookie:`batyeo_session=${token}`})).status,403);
 });
+
+test('a kiosk assigned a Stripe Terminal Location picks it up on its very next runtime/config poll, without a manual entry',async()=>{
+ const repo=new MemoryRepository(seedData('unused'));
+ const stationId=repo.data.stations[0].id;
+ const {credential}=await enroll(repo,stationId,'runtime-1');
+ const before=await call(repo,'runtime/config',undefined,runtimeHeaders('runtime-1',credential));
+ const beforeBody=await before.json() as {envelope:{config:{stripeTerminalLocationId:string|null;version:number}}};
+ assert.equal(beforeBody.envelope.config.stripeTerminalLocationId,null);
+ const adminToken=await asAdmin(repo);
+ const assigned=await call(repo,'station/stripe-location',{stationId,locationId:'tml_ABC123'},{cookie:`batyeo_session=${adminToken}`});
+ assert.equal(assigned.status,200);
+ const after=await call(repo,'runtime/config',undefined,runtimeHeaders('runtime-1',credential));
+ const afterBody=await after.json() as {envelope:{config:{stripeTerminalLocationId:string|null;version:number}}};
+ assert.equal(afterBody.envelope.config.stripeTerminalLocationId,'tml_ABC123');
+ assert.ok(afterBody.envelope.config.version>beforeBody.envelope.config.version);
+});

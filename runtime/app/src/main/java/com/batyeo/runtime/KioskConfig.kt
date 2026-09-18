@@ -24,6 +24,7 @@ data class KioskConfig(
     val playlist: List<MediaItem>,
     val availableLocales: List<LocaleOption>,
     val defaultLocale: String,
+    val stripeTerminalLocationId: String?,
     private val strings: Map<String, Map<String, String>>
 ) {
     /** A partially translated locale still renders: missing keys fall back to the default locale. */
@@ -81,6 +82,8 @@ data class KioskConfig(
                 playlist = playlist,
                 availableLocales = locales,
                 defaultLocale = defaultLocale,
+                stripeTerminalLocationId = config.optString("stripeTerminalLocationId")
+                    .takeIf { it.isNotBlank() && it != "null" },
                 strings = strings
             )
         }

@@ -81,9 +81,14 @@ class TerminalManager(
         }.onFailure { Log.e(TAG, "Terminal.init failed", it) }
     }
 
-    /** No-op if the location isn't configured yet, or a reader is already connected. */
-    fun connectIfConfigured() {
-        val locationId = settings.stripeLocationId()
+    /**
+     * No-op if no Location is configured yet, or a reader is already connected. The server-owned
+     * Location from runtime/config always wins over the locally hand-entered one — BATYEO Core is
+     * the source of truth for a station's own configuration — so the manual field in the config
+     * dialog only matters until an admin assigns one from the portal (Admin -> Affichage).
+     */
+    fun connectIfConfigured(serverLocationId: String? = null) {
+        val locationId = serverLocationId?.takeIf { it.isNotBlank() } ?: settings.stripeLocationId()
         if (locationId.isEmpty() || !Terminal.isInitialized()) return
         if (connectionStatus != ConnectionStatus.NOT_CONNECTED) return
         reconnect.reset()

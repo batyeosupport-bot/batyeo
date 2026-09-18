@@ -59,7 +59,7 @@ class MainActivity : AppCompatActivity() {
     private val requestTerminalPermissions = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { granted ->
-        if (granted.values.all { it }) background.execute { terminal.connectIfConfigured() }
+        if (granted.values.all { it }) background.execute { terminal.connectIfConfigured(config?.stripeTerminalLocationId) }
         else Log.w(TAG, "Terminal permissions refused, card reader stays disconnected: $granted")
     }
 
@@ -195,11 +195,17 @@ class MainActivity : AppCompatActivity() {
     override fun onBackPressed() = Unit
 
     private fun applyConfig(incoming: KioskConfig) {
+        val locationChanged = incoming.stripeTerminalLocationId != config?.stripeTerminalLocationId
         config = incoming
         carousel.setPlaylist(incoming.playlist)
         banner.text = incoming.maintenanceBanner.orEmpty()
         banner.visibility = if (incoming.maintenanceBanner.isNullOrBlank()) View.GONE else View.VISIBLE
         if (settings.locale().isEmpty()) settings.saveLocale(incoming.defaultLocale)
+        // A newly assigned (or changed) server Location retries the reader connection right away,
+        // instead of waiting for the next app restart or permission prompt to notice it.
+        if (locationChanged && ::terminal.isInitialized) {
+            background.execute { terminal.connectIfConfigured(incoming.stripeTerminalLocationId) }
+        }
     }
 
     private fun showCarousel() {

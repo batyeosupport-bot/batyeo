@@ -70,6 +70,23 @@ test('displayConfigFor never mixes another station\'s saved config, media, or ta
  assert.deepEqual(config.advertisingSlots,[]);
 });
 
+test('displayConfigFor exposes the assigned Stripe Terminal Location and defaults to null when unset',()=>{
+ const d=baseData();
+ assert.equal(displayConfigFor(d,'station-1').stripeTerminalLocationId,null);
+ d.stations[0].stripeTerminalLocationId='tml_ABC123';
+ assert.equal(displayConfigFor(d,'station-1').stripeTerminalLocationId,'tml_ABC123');
+ assert.equal(displayConfigFor(d,'station-2').stripeTerminalLocationId,null);
+});
+test('displayConfigFor version bumps when the Stripe Terminal Location changes, so a runtime never gets stuck on a stale one',()=>{
+ const d=baseData();
+ const before=displayConfigFor(d,'station-1').version;
+ d.stations[0].stripeTerminalLocationId='tml_ABC123';
+ d.stations[0].stripeTerminalLocationUpdatedAt=before+100;
+ const after=displayConfigFor(d,'station-1');
+ assert.equal(after.stripeTerminalLocationId,'tml_ABC123');
+ assert.equal(after.version,before+100);
+});
+
 test('displayConfigFor excludes media outside its scheduling window',()=>{
  const d=baseData();
  const now=Date.now();

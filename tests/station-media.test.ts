@@ -1,13 +1,15 @@
 import test from 'node:test';import assert from 'node:assert/strict';import {emptyData} from '../core/types';import {createStation,publicQrUrl,setStripeTerminalLocation} from '../core/station-admin';import {activePlaylist,validatePlaylist} from '../core/media';
 test('admin station creation provisions empty slots and unique public QR',()=>{const d=emptyData();d.partners.push({id:'p',name:'P',city:'Paris',commissionBps:1000});d.venues.push({id:'v',partnerId:'p',name:'V',city:'Paris',address:'A',category:'Bar',hours:'24/7'});const s=createStation(d,{partnerId:'p',venueId:'v',publicId:'new-station',capacity:3});assert.equal(d.slots.filter(x=>x.stationId===s.id).length,3);assert.equal(publicQrUrl('https://batyeo.test/','new-station'),'https://batyeo.test/rent/new-station');assert.throws(()=>createStation(d,{partnerId:'p',venueId:'v',publicId:'new-station',capacity:3}));});
-test('setStripeTerminalLocation assigns, clears and rejects a malformed Location ID',()=>{
+test('setStripeTerminalLocation assigns, clears and rejects a malformed Location ID, bumping its own timestamp each time',()=>{
  const d=emptyData();d.partners.push({id:'p',name:'P',city:'Paris',commissionBps:1000});d.venues.push({id:'v',partnerId:'p',name:'V',city:'Paris',address:'A',category:'Bar',hours:'24/7'});
  const s=createStation(d,{partnerId:'p',venueId:'v',publicId:'new-station',capacity:3});
  assert.equal(s.stripeTerminalLocationId,null);
- setStripeTerminalLocation(d,s.id,'tml_ABC123');
+ setStripeTerminalLocation(d,s.id,'tml_ABC123',100);
  assert.equal(s.stripeTerminalLocationId,'tml_ABC123');
- setStripeTerminalLocation(d,s.id,null);
+ assert.equal(s.stripeTerminalLocationUpdatedAt,100);
+ setStripeTerminalLocation(d,s.id,null,200);
  assert.equal(s.stripeTerminalLocationId,null);
+ assert.equal(s.stripeTerminalLocationUpdatedAt,200);
  assert.throws(()=>setStripeTerminalLocation(d,s.id,'not-a-location-id'),/Location Stripe invalide/);
  assert.throws(()=>setStripeTerminalLocation(d,'missing',null),/Station introuvable/);
 });
