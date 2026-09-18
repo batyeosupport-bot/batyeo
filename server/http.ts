@@ -16,8 +16,9 @@ import {checksumConfig} from '../core/runtime-config';
 import {heartbeatHealth} from '../core/heartbeat';
 import {validateTranslations} from '../core/i18n';
 import type {Actor,Data,StationHeartbeatRecord} from '../core/types';
-import {createStation,createVenue,publicQrUrl,setStripeTerminalLocation,blockStationRentals,unblockStationRentals,archiveStation,restoreStation,relocateStation} from '../core/station-admin';
+import {createStation,createVenue,publicQrUrl,setStripeTerminalLocation,blockStationRentals,unblockStationRentals,archiveStation,restoreStation,relocateStation,setPartnerCommission} from '../core/station-admin';
 import {createMedia,setMediaStatus} from '../core/media-admin';
+import {COMMISSION_TIERS_BPS} from '../core/pricing';
 
 const engine=new RentalEngine();
 const station=new MockBatteryStationProvider();
@@ -315,6 +316,15 @@ async function route(request:Request,path:string){
   authorize(actor,'settings');
   const input=z.object({partnerId:id,name:z.string().trim().min(1).max(120),city:z.string().trim().min(1).max(80),address:z.string().trim().min(1).max(200),category:z.string().trim().max(60).optional(),hours:z.string().trim().max(60).optional(),latitude:z.number().min(-90).max(90).nullable().optional(),longitude:z.number().min(-180).max(180).nullable().optional()}).strict().parse(body);
   return reply(await write('settings',(d,current)=>{assertTenant(current,input.partnerId);const venue=createVenue(d,{...input,category:input.category??'',hours:input.hours??''});audit(d,current,`Établissement créé · ${venue.name}`);return {venue};}),201);
+ }
+ if(path==='partner/set-commission'){
+  authorize(actor,'pricing');
+  const input=z.object({partnerId:id,commissionBps:z.union([z.literal(COMMISSION_TIERS_BPS[0]),z.literal(COMMISSION_TIERS_BPS[1]),z.literal(COMMISSION_TIERS_BPS[2]),z.literal(COMMISSION_TIERS_BPS[3]),z.literal(COMMISSION_TIERS_BPS[4])]).nullable()}).strict().parse(body);
+  return reply(await write('pricing',(d,current)=>{
+   const partner=setPartnerCommission(d,input.partnerId,input.commissionBps);
+   audit(d,current,`Commission partenaire · ${partner.name} · ${input.commissionBps===null?'taux de la grille':`${input.commissionBps/100} %`}`);
+   return {partner};
+  }));
  }
  if(path==='media/create'){
   authorize(actor,'settings');

@@ -7,7 +7,7 @@ export interface StationHeartbeatRecord extends StationHeartbeat { id:string; }
 export const ROLES = ['SUPER_ADMIN','ADMIN','OPERATIONS','FINANCE','SUPPORT','PARTNER_ADMIN','PARTNER_USER'] as const;
 export type Role = typeof ROLES[number];
 export interface User { id:string; email:string; name:string; role:Role; partnerId:string|null; passwordHash:string; disabledAt?:number|null; authVersion?:number; }
-export interface Partner { id:string; name:string; city:string; commissionBps:number; }
+export interface Partner { id:string; name:string; city:string; /** Taux de commission propre au partenaire. null = ce partenaire suit le taux de la grille tarifaire active. */ commissionBps:number|null; }
 export interface Venue { id:string; partnerId:string; name:string; city:string; address:string; category:string; hours:string; latitude?:number|null; longitude?:number|null; }
 export type FailureMode = 'none'|'ejection'|'timeout'|'payment';
 export interface Station { id:string; publicId:string; venueId:string; partnerId:string; online:boolean; failure:FailureMode; capacity:number; provider?:'mock'|'manufacturer'; providerDeviceId?:string|null; providerStatus?:string|null; providerLastSyncedAt?:number|null; lastSeenAt?:number|null; stripeTerminalLocationId?:string|null; stripeTerminalLocationUpdatedAt?:number|null; rentalsBlocked?:boolean; rentalsBlockedReason?:string|null; rentalsBlockedAt?:number|null; archivedAt?:number|null; }

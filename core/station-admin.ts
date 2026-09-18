@@ -1,4 +1,4 @@
-import type {Data,Station,Venue} from './types';
+import type {Data,Partner,Station,Venue} from './types';
 import {DomainError} from './providers';
 import {OPEN_STATES} from './rental';
 export interface CreateStationInput {partnerId:string;venueId:string;publicId:string;capacity:number;}
@@ -63,6 +63,16 @@ export function relocateStation(d:Data,stationId:string,venueId:string,now=Date.
  station.venueId=venue.id;station.partnerId=venue.partnerId;
  station.stripeTerminalLocationId=null;station.stripeTerminalLocationUpdatedAt=now;
  return station;
+}
+/**
+ * Taux de commission propre à un partenaire ; `null` le remet sur celui de la grille tarifaire.
+ * N'affecte que les locations créées ensuite : le taux est figé dans le snapshot de chaque
+ * location au moment de sa création (voir pricingForPartner), jamais relu à la restitution.
+ */
+export function setPartnerCommission(d:Data,partnerId:string,commissionBps:number|null):Partner {
+ const partner=d.partners.find(p=>p.id===partnerId);if(!partner)throw new DomainError('Partenaire introuvable.',404);
+ if(commissionBps!==null&&(!Number.isSafeInteger(commissionBps)||commissionBps<0||commissionBps>10_000))throw new DomainError('Taux de commission invalide.',400);
+ partner.commissionBps=commissionBps;return partner;
 }
 export interface CreateVenueInput {partnerId:string;name:string;city:string;address:string;category:string;hours:string;latitude?:number|null;longitude?:number|null;}
 export function createVenue(d:Data,input:CreateVenueInput):Venue {

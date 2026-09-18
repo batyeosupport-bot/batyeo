@@ -1,4 +1,4 @@
-import {calculatePrice,commission} from './pricing';
+import {calculatePrice,commission,pricingForPartner} from './pricing';
 import {transition, type RentalState} from './state-machine';
 import {DomainError,MockBatteryStationProvider,MockPaymentProvider,PhysicalResultUnknownError, type BatteryStationProvider,type PaymentProvider} from './providers';
 import type {Actor,Data,Payment,Rental} from './types';
@@ -26,7 +26,8 @@ export class RentalEngine {
   const previous=d.rentals.find(r=>r.customerId===customerId&&r.idempotencyKey===key);if(previous){const requested=this.station.getStation(d,stationId);if(requested.id!==previous.stationId)throw new DomainError('Cette clé de demande correspond à une autre station.');return previous;}
   const open=d.rentals.find(r=>r.customerId===customerId&&OPEN_STATES.includes(r.state));if(open){const requested=this.station.getStation(d,stationId);if(requested.id!==open.stationId)throw new DomainError('Vous avez déjà une location en cours à une autre station.');return open;}
   const s=this.station.getStation(d,stationId);if(!s.online)throw new DomainError('Cette station est hors ligne. Choisissez une autre station.');if(s.rentalsBlocked)throw new DomainError('Cette station est temporairement bloquée pour maintenance.');if(this.station.getAvailability(d,s.id)<1)throw new DomainError('Toutes les batteries sont utilisées.');
-  const pricing=structuredClone(d.pricing[0]);if(!pricing)throw new DomainError('Tarification indisponible.',503);
+  const grid=d.pricing[0];if(!grid)throw new DomainError('Tarification indisponible.',503);
+  const pricing=structuredClone(pricingForPartner(grid,d.partners.find(p=>p.id===s.partnerId)?.commissionBps));
   const r:Rental={id:crypto.randomUUID(),customerId,partnerId:s.partnerId,stationId:s.id,batteryId:null,returnStationId:null,state:'CREATED',paymentState:'PENDING',physicalState:'IDLE',createdAt:now,startedAt:null,returnedAt:null,deadline:null,pricing,amountCents:0,commissionCents:0,idempotencyKey:key,error:null,simulatedMinutes:0};
   d.rentals.push(r);d.terms.push({id:crypto.randomUUID(),rentalId:r.id,version:'demo-2026-09-v1',acceptedAt:now,customerId});this.event(d,r,'CREATED','Location créée · conditions acceptées',now);return r;
  }

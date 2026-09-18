@@ -58,7 +58,7 @@ model Partner {
   id            String @id @default(uuid())
   name          String
   city          String
-  commissionBps Int @default(2000)
+  commissionBps Int?
   venues        Venue[]
   users         PartnerUser[]
   rentals       Rental[]

@@ -29,6 +29,7 @@ export function validateData(d:Data):void {
  unique(d.rentals.map(r=>r.customerId+':'+r.idempotencyKey),'duplicate idempotency key');
  ensure(d.pricing.length<=1,'multiple active pricing versions');
  for(const p of d.pricing)validatePricing(p);
+ for(const p of d.partners)ensure(p.commissionBps===null||(integer(p.commissionBps)&&p.commissionBps<=10_000),'partner commission rate');
  for(const m of d.partnerUsers){ensure(d.users.some(u=>u.id===m.userId)&&d.partners.some(p=>p.id===m.partnerId),'orphan membership');}
  for(const v of d.venues)ensure(d.partners.some(p=>p.id===v.partnerId),'orphan venue');
  for(const s of d.stations){ensure(d.venues.some(v=>v.id===s.venueId&&v.partnerId===s.partnerId),'station tenant');ensure(integer(s.capacity,1),'station capacity');if(s.provider)ensure(['mock','manufacturer'].includes(s.provider),'station provider');if(s.providerLastSyncedAt!=null)ensure(integer(s.providerLastSyncedAt),'manufacturer sync timestamp');if(s.lastSeenAt!=null)ensure(integer(s.lastSeenAt),'manufacturer last seen timestamp');if(s.stripeTerminalLocationId!=null)ensure(/^tml_[a-zA-Z0-9]{1,255}$/.test(s.stripeTerminalLocationId),'stripe terminal location id');if(s.stripeTerminalLocationUpdatedAt!=null)ensure(integer(s.stripeTerminalLocationUpdatedAt),'stripe terminal location timestamp');}
