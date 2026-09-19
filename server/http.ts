@@ -42,7 +42,7 @@ export function createApi(repository:Repository,options:{demo:boolean;allowLegac
   const runtimeEnv=typeof process!=='undefined'?process.env:{};paymentMode=resolvePaymentMode(runtimeEnv);validateManufacturerStartup(runtimeEnv);
   const manufacturerConfig=resolveManufacturerConfig(runtimeEnv);const manufacturerClient=manufacturerConfig?new ManufacturerHttpClient(manufacturerConfig):undefined;
   manufacturerProvider=dependencies.manufacturerProvider??(manufacturerClient?new ManufacturerBatteryStationProvider(manufacturerClient):undefined);
-  manufacturerSync=manufacturerProvider?new ManufacturerSyncService(repository,manufacturerProvider):undefined;
+  manufacturerSync=manufacturerProvider?new ManufacturerSyncService(repository,manufacturerProvider,{onReturnDetected:(c,at)=>stripeCoordinator?stripeCoordinator.return(repository,c.rentalId,c.stationId,at,true):repository.transaction(d=>engine.return(d,c.rentalId,c.stationId,at,true))}):undefined;
   // Only ever constructed on an explicit opt-in that validateManufacturerStartup has already found
   // coherent; without it the coordinator keeps its mock path and no rental can move real hardware.
   batteryEjector=dependencies.batteryEjector??(manufacturerClient&&manufacturerConfig?.allowPhysicalActions?new ManufacturerBatteryEjector(manufacturerClient,repository):undefined);

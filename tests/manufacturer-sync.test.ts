@@ -6,7 +6,8 @@ import {emptyData,type Data} from '../core/types';
 import type {Repository} from '../core/repository';
 import type {ManufacturerDeviceSnapshot} from '../core/manufacturer';
 import {ManufacturerError} from '../core/manufacturer';
-import {ManufacturerSyncService,linkManufacturerStation,providerHealth,compareManufacturerSnapshot} from '../core/manufacturer-sync';
+import {ManufacturerSyncService,linkManufacturerStation,providerHealth,compareManufacturerSnapshot,detectReturns,RETURN_SETTLE_MS} from '../core/manufacturer-sync';
+import {RentalEngine} from '../core/rental';
 import {dashboard} from '../core/queries';
 import {createApi} from '../server/http';
 
@@ -36,3 +37,32 @@ test('partner dashboard cannot see another tenant manufacturer records',()=>{con
 
 test('manufacturer webhook is deduplicated, untrusted and only changes state after read-only reconciliation',async()=>{const data=seedData('x');linkManufacturerStation(data,'station-paris','BAJIE','BJH02347',100);const repo=new MemoryRepository(data),provider={getDeviceInfo:async(id:string)=>snapshot(id),listDevices:async()=>[]};const api=createApi(repo,{demo:true,allowLegacyCredentials:true},{manufacturerProvider:provider});const make=()=>new Request('https://batyeo.test/api/core/manufacturer/webhook',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({documentedShape:false,value:1})});const first=await api.POST(make(),{params:Promise.resolve({path:['manufacturer','webhook']})});assert.equal(first.status,202);assert.equal(repo.data.webhookEvents[0].status,'PROCESSED');assert.ok(repo.data.webhookEvents[0].source.startsWith('manufacturer:'));const second=await api.POST(make(),{params:Promise.resolve({path:['manufacturer','webhook']})});assert.equal((await second.json() as {duplicate:boolean}).duplicate,true);assert.equal(repo.data.webhookEvents.length,1);});
 test('internal scheduler trigger is denied without secret and runs read-only with bearer secret',async()=>{const data=seedData('x');linkManufacturerStation(data,'station-paris','BAJIE','BJH02347',100);const repo=new MemoryRepository(data),provider={getDeviceInfo:async(id:string)=>snapshot(id),listDevices:async()=>[]},previous=process.env.MANUFACTURER_SYNC_SECRET;process.env.MANUFACTURER_SYNC_SECRET='staging-secret';try{const api=createApi(repo,{demo:false,allowLegacyCredentials:false},{manufacturerProvider:provider});const request=(secret?:string)=>new Request('https://batyeo.test/api/core/internal/manufacturer/sync',{method:'POST',headers:secret?{authorization:`Bearer ${secret}`}:{}});const denied=await api.POST(request('wrong'),{params:Promise.resolve({path:['internal','manufacturer','sync']})});assert.equal(denied.status,401);const accepted=await api.POST(request('staging-secret'),{params:Promise.resolve({path:['internal','manufacturer','sync']})});assert.equal(accepted.status,200);assert.equal(repo.data.manufacturerSyncRuns[0].trigger,'SCHEDULED');}finally{if(previous===undefined)delete process.env.MANUFACTURER_SYNC_SECRET;else process.env.MANUFACTURER_SYNC_SECRET=previous;}});
+
+const snapshotHolding=(deviceId:string,batteryId:string):ManufacturerDeviceSnapshot=>{const base=snapshot(deviceId);return {...base,batteries:[{id:batteryId,slot:1,voltage:4100}],slots:[{position:1,battery:{id:batteryId,slot:1,voltage:4100}},...base.slots.slice(1)]};};
+const rentedFixture=()=>{const data=seedData('x');const link=linkManufacturerStation(data,'station-paris','BAJIE','RET-1',100);const engine=new RentalEngine();const rental=engine.start(data,'cust-1','station-paris','k-1',1_000);assert.equal(rental.state,'ACTIVE');return {data,link,engine,rental};};
+
+test('detectReturns only flags an open rental whose battery is physically back in a slot after the settle window',()=>{
+ const {data,link,rental}=rentedFixture();const back=snapshotHolding('RET-1',rental.batteryId!);
+ assert.deepEqual(detectReturns(data,link,back,1_000+RETURN_SETTLE_MS),[{rentalId:rental.id,stationId:'station-paris'}]);
+ assert.deepEqual(detectReturns(data,link,back,1_000+RETURN_SETTLE_MS-1),[]);
+ assert.deepEqual(detectReturns(data,link,snapshot('RET-1'),1_000+RETURN_SETTLE_MS),[]);
+ data.rentals.find(r=>r.id===rental.id)!.state='COMPLETED';assert.deepEqual(detectReturns(data,link,back,1_000+RETURN_SETTLE_MS),[]);
+});
+
+test('a sync that sees the rented battery back in a slot closes the rental from the manufacturer read, not from the customer',async()=>{
+ const {data,rental,engine}=rentedFixture();const repo=new MemoryRepository(data);const at=1_000+10*60_000;
+ const service=new ManufacturerSyncService(repo,{getDeviceInfo:async id=>snapshotHolding(id,rental.batteryId!)},{now:()=>at,onReturnDetected:(c,now)=>repo.transaction(d=>engine.return(d,c.rentalId,c.stationId,now,true))});
+ await service.run({trigger:'WEBHOOK'});
+ const closed=repo.data.rentals.find(r=>r.id===rental.id)!;
+ assert.equal(closed.state,'COMPLETED');assert.equal(closed.returnStationId,'station-paris');assert.equal(closed.returnedAt,at);assert.ok(closed.amountCents>0);
+ assert.ok(repo.data.events.some(e=>e.rentalId===rental.id&&e.detail==='Retour confirmé par relecture fabricant'));
+ assert.equal(repo.data.batteries.find(b=>b.id===rental.batteryId)!.status,'AVAILABLE');
+ const again=await service.run({trigger:'WEBHOOK'});assert.equal(again.status,'COMPLETED');assert.equal(repo.data.rentals.find(r=>r.id===rental.id)!.returnedAt,at);
+});
+
+test('a failing close handler never marks the station sync as failed and leaves the rental open',async()=>{
+ const {data,rental}=rentedFixture();const repo=new MemoryRepository(data);const logs:string[]=[];
+ const service=new ManufacturerSyncService(repo,{getDeviceInfo:async id=>snapshotHolding(id,rental.batteryId!)},{now:()=>1_000+10*60_000,logger:e=>logs.push(e.event),onReturnDetected:async()=>{throw new Error('boom');}});
+ const run=await service.run({trigger:'SCHEDULED'});
+ assert.equal(run.status,'COMPLETED');assert.equal(repo.data.rentals.find(r=>r.id===rental.id)!.state,'ACTIVE');assert.ok(logs.includes('manufacturer_return_close_failed'));
+});
