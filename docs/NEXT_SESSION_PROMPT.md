@@ -77,8 +77,8 @@ Route `system/status` : mode de paiement, fournisseur de la borne, verrou d'éje
 
 ### E. Reste de moindre priorité
 - **Activer Vercel Blob** (Storage → Create → Blob) : sans ça le bouton de téléversement des médias renvoie une erreur claire mais ne fonctionne pas. Geste tableau de bord, côté utilisateur.
-- **Écrans rares du parcours client non traduits** : batterie jamais rendue, erreur de vérification, annulation/expiration. Les 4 écrans du cas courant le sont.
-- **Médias pour les partenaires** : le serveur autorise déjà un PARTNER_ADMIN à créer un média ciblé sur **sa propre** borne (testé), mais la section « Affichage » n'apparaît pas dans le menu du portail partenaire. Petite ouverture quand l'utilisateur le voudra.
+- ~~Écrans rares du parcours client non traduits~~ — **fait le 2026-09-19** : échec, retour en cours, vérification, annulation/expiration et batterie perdue passent par `web_failed_*`, `web_returning_*`, `web_review_*`, `web_cancelled_*`, `web_lost_*` (français codé en dur en repli ; `\n` = retour à la ligne dans les titres). Restent codés en dur : « Besoin d’aide ? », « Les stations », le bandeau « MODE DÉMO » et le libellé « Langue ».
+- ~~Médias pour les partenaires~~ — **fait le 2026-09-19** : la section « Affichage » apparaît pour un PARTNER_ADMIN (pas PARTNER_USER) ; il ne voit et ne crée que des médias visant *exclusivement* ses propres stations (les pubs « toutes stations » et celles d'un autre partenaire lui restent invisibles). Un média multi-partenaires créé par le personnel joue sur sa borne sans qu'il le voie. Jamais vu dans un navigateur.
 - **App mobile cliente** : jamais lancée sur un vrai appareil (pas d'émulateur Android sur cette machine ; un simulateur iOS existe, jamais essayé).
 - **`pnpm test:integration` échoue** pour une raison **préexistante et sans rapport** : le schéma D1 sous `drizzle/` n'a jamais eu la table `displayConfigs` — cible Cloudflare Workers visiblement abandonnée au profit de Vercel + Postgres. À supprimer ou à remettre à niveau, mais ce n'est pas une régression.
 
