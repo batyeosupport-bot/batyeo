@@ -16,7 +16,7 @@ import {checksumConfig} from '../core/runtime-config';
 import {heartbeatHealth} from '../core/heartbeat';
 import {validateTranslations} from '../core/i18n';
 import type {Actor,Data,StationHeartbeatRecord} from '../core/types';
-import {createStation,createVenue,updateVenue,publicQrUrl,setStripeTerminalLocation,blockStationRentals,unblockStationRentals,archiveStation,restoreStation,relocateStation,setPartnerCommission} from '../core/station-admin';
+import {createStation,createVenue,updateVenue,publicQrUrl,setStripeTerminalLocation,blockStationRentals,unblockStationRentals,archiveStation,restoreStation,relocateStation,setPartnerCommission,createPartner} from '../core/station-admin';
 import {createMedia,setMediaStatus} from '../core/media-admin';
 import {COMMISSION_TIERS_BPS} from '../core/pricing';
 import {handleUpload,type HandleUploadBody} from '@vercel/blob/client';
@@ -335,6 +335,19 @@ async function route(request:Request,path:string){
    audit(d,current,`Établissement modifié · ${venue.name}${before===`${venue.address} · ${venue.city}`?'':` · adresse : ${before} → ${venue.address} · ${venue.city}`}`);
    return {venue};
   }));
+ }
+ if(path==='partner/create'){
+  authorize(actor,'settings');
+  const input=z.object({name:z.string().trim().min(1).max(120),city:z.string().trim().min(1).max(80),adminEmail:z.string().trim().email().max(200),adminName:z.string().trim().min(1).max(80)}).strict().parse(body);
+  const temporaryPassword=crypto.randomUUID().replace(/-/g,'').slice(0,16); // shown once in the response, never logged, never stored in plaintext
+  const passwordHash=await createPasswordHash(temporaryPassword);
+  const result=await write('settings',(d,current)=>{
+   if(!['SUPER_ADMIN','ADMIN'].includes(current.role))throw new DomainError('Seul le personnel BATYEO peut créer un nouveau partenaire.',403);
+   const {partner,user}=createPartner(d,input,passwordHash);
+   audit(d,current,`Partenaire créé · ${partner.name} (${user.email})`);
+   return {partner};
+  });
+  return reply({...result,adminEmail:input.adminEmail.trim().toLowerCase(),temporaryPassword},201);
  }
  if(path==='partner/set-commission'){
   authorize(actor,'pricing');

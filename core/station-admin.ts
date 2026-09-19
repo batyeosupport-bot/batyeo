@@ -1,6 +1,29 @@
-import type {Data,Partner,Station,Venue} from './types';
+import type {Data,Partner,Station,User,Venue} from './types';
 import {DomainError} from './providers';
 import {OPEN_STATES} from './rental';
+export interface CreatePartnerInput {name:string;city:string;adminEmail:string;adminName:string;}
+/**
+ * Onboards a brand-new tenant: the Partner row and its first PARTNER_ADMIN login, in one step —
+ * a partner with no user attached is a dead end nobody can ever sign into. commissionBps starts
+ * at null (follows the pricing grid); a SUPER_ADMIN/ADMIN/FINANCE role can set a fixed rate
+ * afterward from the Partners table (setPartnerCommission), same as for any existing partner.
+ * passwordHash is computed by the caller (async, outside this synchronous mutation) and is the
+ * hash of a one-time temporary secret the caller shows once and never stores in plaintext.
+ */
+export function createPartner(d:Data,input:CreatePartnerInput,passwordHash:string):{partner:Partner;user:User} {
+ if(!input.name.trim()||input.name.length>120)throw new DomainError('Nom de partenaire invalide.',400);
+ if(!input.city.trim()||input.city.length>80)throw new DomainError('Ville invalide.',400);
+ if(!input.adminName.trim()||input.adminName.length>80)throw new DomainError('Nom du contact invalide.',400);
+ const email=input.adminEmail.trim().toLowerCase();
+ if(!email)throw new DomainError('Email du contact invalide.',400);
+ if(d.users.some(u=>u.email.toLowerCase()===email))throw new DomainError('Cet email est déjà utilisé.',409);
+ const partner:Partner={id:crypto.randomUUID(),name:input.name.trim(),city:input.city.trim(),commissionBps:null};
+ d.partners.push(partner);
+ const user:User={id:crypto.randomUUID(),email,name:input.adminName.trim(),role:'PARTNER_ADMIN',partnerId:partner.id,passwordHash,authVersion:0};
+ d.users.push(user);
+ d.partnerUsers.push({id:crypto.randomUUID(),userId:user.id,partnerId:partner.id});
+ return {partner,user};
+}
 export interface CreateStationInput {partnerId:string;venueId:string;publicId:string;capacity:number;}
 export function createStation(d:Data,input:CreateStationInput):Station {if(!input.publicId||!/^[a-z0-9-]{3,64}$/.test(input.publicId))throw new DomainError('Identifiant public invalide.',400);if(input.capacity<1||input.capacity>500)throw new DomainError('Capacité invalide.',400);if(d.stations.some(s=>s.publicId===input.publicId))throw new DomainError('Identifiant public déjà utilisé.',409);if(!d.partners.some(p=>p.id===input.partnerId)||!d.venues.some(v=>v.id===input.venueId&&v.partnerId===input.partnerId))throw new DomainError('Établissement ou partenaire invalide.',404);const station:Station={id:crypto.randomUUID(),publicId:input.publicId,venueId:input.venueId,partnerId:input.partnerId,online:false,failure:'none',capacity:input.capacity,provider:'mock',providerDeviceId:null,providerStatus:'UNKNOWN',providerLastSyncedAt:null,lastSeenAt:null,stripeTerminalLocationId:null};d.stations.push(station);for(let i=1;i<=input.capacity;i++)d.slots.push({id:`${station.id}-${i}`,stationId:station.id,position:i,batteryId:null});return station;}
 export function publicQrUrl(origin:string,publicId:string){return `${origin.replace(/\/$/,'')}/rent/${encodeURIComponent(publicId)}`;}
