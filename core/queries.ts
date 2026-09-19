@@ -2,12 +2,14 @@ import type {Actor,Data,Rental} from './types';
 import {authorize,inTenant} from './rental';
 import {calculatePrice} from './pricing';
 import {providerHealth} from './manufacturer-sync';
+import {DomainError} from './providers';
 import type {StationDisplayConfig,StationPublicSnapshot} from './station-runtime';
 import {activePlaylist} from './media';
 import {heartbeatHealth} from './heartbeat';
 import {evaluateAlerts} from './ops-alerts';
 export function stationViews(d:Data){return d.stations.map(s=>({...s,venue:d.venues.find(v=>v.id===s.venueId)!,available:d.slots.filter(slot=>slot.stationId===s.id&&d.batteries.some(b=>b.id===slot.batteryId&&b.status==='AVAILABLE')).length,freeSlots:d.slots.filter(slot=>slot.stationId===s.id&&!slot.batteryId).length}));}
-export function stationDisplaySnapshot(d:Data,stationId:string):StationPublicSnapshot {const station=stationViews(d).find(row=>row.id===stationId||row.publicId===stationId);if(!station)throw new Error('Station introuvable.');const pricing=d.pricing[0];if(!pricing)throw new Error('Tarification indisponible.');return {stationId:station.id,publicId:station.publicId,venueName:station.venue.name,online:station.online,availableBatteries:station.available,capacity:station.capacity,hourlyCents:pricing.hourlyCents,capCents:pricing.capCents,depositCents:pricing.depositCents,qrTarget:`/rent/${station.publicId}`,providerHealth:providerHealth(d).status};}
+/** Plain Error() here used to reach handle()'s generic 503 instead of a clean 404 — harmless while every caller already validated the station, but reachable the moment an unvalidated customer-supplied id (e.g. a stale QR code) reaches it. */
+export function stationDisplaySnapshot(d:Data,stationId:string):StationPublicSnapshot {const station=stationViews(d).find(row=>row.id===stationId||row.publicId===stationId);if(!station)throw new DomainError('Station introuvable.',404);const pricing=d.pricing[0];if(!pricing)throw new DomainError('Tarification indisponible.',503);return {stationId:station.id,publicId:station.publicId,venueName:station.venue.name,online:station.online,availableBatteries:station.available,capacity:station.capacity,hourlyCents:pricing.hourlyCents,capCents:pricing.capCents,depositCents:pricing.depositCents,qrTarget:`/rent/${station.publicId}`,providerHealth:providerHealth(d).status};}
 /**
  * Display configuration served to a station runtime: admin-owned text and flags,
  * the translation pack, the media playlist filtered to what is published, in its
@@ -17,8 +19,8 @@ export function stationDisplaySnapshot(d:Data,stationId:string):StationPublicSna
  * holding a newer config never downgrades itself.
  */
 export function displayConfigFor(d:Data,stationId:string):StationDisplayConfig {
- const station=d.stations.find(row=>row.id===stationId||row.publicId===stationId);if(!station)throw new Error('Station introuvable.');
- const venue=d.venues.find(row=>row.id===station.venueId);if(!venue)throw new Error('Établissement introuvable.');
+ const station=d.stations.find(row=>row.id===stationId||row.publicId===stationId);if(!station)throw new DomainError('Station introuvable.',404);
+ const venue=d.venues.find(row=>row.id===station.venueId);if(!venue)throw new DomainError('Établissement introuvable.',404);
  const stored=d.displayConfigs.find(row=>row.stationId===station.id);
  const version=Math.max(stored?.updatedAt??0,d.media.reduce((latest,item)=>Math.max(latest,item.updatedAt??item.createdAt),0),station.stripeTerminalLocationUpdatedAt??0,1);
  const issuedAt=Date.now(),checksum=`live-${version}`;

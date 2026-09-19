@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {validateTranslations,missingStringKeys,resolveStrings,RUNTIME_STRING_KEYS,MAX_RUNTIME_LOCALES,type RuntimeTranslations} from '../core/i18n';
+import {validateTranslations,missingStringKeys,resolveStrings,RUNTIME_STRING_KEYS,MAX_RUNTIME_LOCALES,WEB_STRING_KEYS,WEB_DEFAULT_STRINGS_FR,missingWebStringKeys,resolveWebStrings,type RuntimeTranslations} from '../core/i18n';
 
 function pack(overrides:Partial<RuntimeTranslations>={}):RuntimeTranslations {
  return {
@@ -73,4 +73,32 @@ test('resolveStrings only overrides keys the target locale actually has; other d
  const resolved=resolveStrings(pack({strings:{'fr-FR':{scanQr:'Scannez le QR',close:'Fermer'},'en-US':{scanQr:'Scan'}}}),'en-US');
  assert.equal(resolved.scanQr,'Scan');
  assert.equal(resolved.close,'Fermer');
+});
+
+test('WEB_DEFAULT_STRINGS_FR covers every web key with real, non-empty French copy',()=>{
+ for(const key of WEB_STRING_KEYS)assert.ok(WEB_DEFAULT_STRINGS_FR[key]?.trim(),`missing default French copy for ${key}`);
+ assert.equal(Object.keys(WEB_DEFAULT_STRINGS_FR).length,WEB_STRING_KEYS.length,'no stray or forgotten key');
+});
+test('resolveWebStrings renders the built-in French baseline even with zero admin configuration',()=>{
+ const resolved=resolveWebStrings(null,'fr-FR');
+ assert.equal(resolved.web_intro_cta,'PRENDRE UNE BATTERIE');
+ assert.equal(resolved.web_receipt_eyebrow,'BATTERIE RENDUE');
+});
+test('resolveWebStrings overlays an admin-configured locale over the French baseline, key by key',()=>{
+ const translations:RuntimeTranslations={defaultLocale:'fr-FR',available:[{code:'fr',label:'Français',locale:'fr-FR'},{code:'en',label:'English',locale:'en-US'}],strings:{'fr-FR':{},'en-US':{web_intro_cta:'RENT A BATTERY'}}};
+ const resolved=resolveWebStrings(translations,'en-US');
+ assert.equal(resolved.web_intro_cta,'RENT A BATTERY','the admin’s English text wins');
+ assert.equal(resolved.web_receipt_eyebrow,'BATTERIE RENDUE','untranslated keys still fall back to the French baseline, never blank or a raw key name');
+});
+test('resolveWebStrings for an unconfigured locale is just the French baseline',()=>{
+ const translations:RuntimeTranslations={defaultLocale:'fr-FR',available:[{code:'fr',label:'Français',locale:'fr-FR'}],strings:{'fr-FR':{}}};
+ assert.deepEqual(resolveWebStrings(translations,'de-DE'),WEB_DEFAULT_STRINGS_FR);
+});
+test('missingWebStringKeys treats French as always complete and reports real gaps for other locales',()=>{
+ const translations:RuntimeTranslations={defaultLocale:'fr-FR',available:[{code:'fr',label:'Français',locale:'fr-FR'},{code:'en',label:'English',locale:'en-US'}],strings:{'fr-FR':{},'en-US':{web_intro_cta:'RENT A BATTERY'}}};
+ assert.deepEqual(missingWebStringKeys(translations,'fr-FR'),[],'French is never “missing” — it has the built-in baseline');
+ const missing=missingWebStringKeys(translations,'en-US');
+ assert.ok(missing.includes('web_receipt_eyebrow'));
+ assert.ok(!missing.includes('web_intro_cta'));
+ assert.equal(missing.length,WEB_STRING_KEYS.length-1);
 });

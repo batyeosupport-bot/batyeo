@@ -20,7 +20,7 @@ import {fr} from 'date-fns/locale';
 import type {DateRange} from 'react-day-picker';
 import {euro,COMMISSION_TIERS_BPS} from '@/core/pricing';
 import type {Role} from '@/core/types';
-import {RUNTIME_STRING_KEYS} from '@/core/i18n';
+import {RUNTIME_STRING_KEYS,WEB_STRING_KEYS} from '@/core/i18n';
 const navigation=[['overview','Vue d’ensemble',LayoutDashboard],['stations','Stations',Radio],['batteries','Batteries',BatteryCharging],['rentals','Locations',ArrowUpRight],['partners','Partenaires',Users],['payments','Paiements',CreditCard],['finance','Finance',Wallet],['analytics','Statistiques',Activity],['pricing','Tarification',SlidersHorizontal],['support','Assistance',LifeBuoy],['monitoring','Monitoring',Activity],['display','Affichage',Tv],['simulator','Simulateur',FlaskConical],['settings','Paramètres',Settings]] as const;
 const partnerPages=['overview','stations','rentals','analytics','finance','support','settings'];
 export function Login({partner}: {partner:boolean}){
@@ -286,9 +286,11 @@ function TranslationsEditor({data,refresh}:{data:Dashboard;refresh:()=>Promise<v
  const [targets,setTargets]=useState<string[]>([]);
  const [busy,setBusy]=useState(false);
  const [newLocale,setNewLocale]=useState({code:'',label:'',locale:''});
+ const [surface,setSurface]=useState<'kiosk'|'web'>('kiosk');
+ const keys:readonly string[]=surface==='kiosk'?RUNTIME_STRING_KEYS:WEB_STRING_KEYS;
  const dictionary=strings[active]??{};
- const translated=RUNTIME_STRING_KEYS.filter(key=>dictionary[key]?.trim()).length;
- const visibleKeys=RUNTIME_STRING_KEYS.filter(key=>!onlyMissing||!dictionary[key]?.trim());
+ const translated=keys.filter(key=>dictionary[key]?.trim()).length;
+ const visibleKeys=keys.filter(key=>!onlyMissing||!dictionary[key]?.trim());
  const stations=targets.length?targets:data.stations.map(s=>s.id);
  function setKey(key:string,value:string){setStrings(previous=>({...previous,[active]:{...(previous[active]??{}),[key]:value}}));}
  function addLocale(){
@@ -301,20 +303,22 @@ function TranslationsEditor({data,refresh}:{data:Dashboard;refresh:()=>Promise<v
   await api('display/translations',{stationIds:stations,defaultLocale,available:locales,strings});
   await refresh();toast.success(`Traductions publiées sur ${stations.length} borne${stations.length>1?'s':''}.`);
  }catch(e){toast.error(e instanceof Error?e.message:'Publication impossible.');}finally{setBusy(false);}}
- return <section className="panel"><PanelTitle title="Langues de la borne" subtitle={`${RUNTIME_STRING_KEYS.length} textes couvrent tous les écrans : accueil, tarifs, paiement carte, éjection, retour, reçu et erreurs`} action={
+ return <section className="panel"><PanelTitle title="Langues" subtitle={surface==='kiosk'?`${RUNTIME_STRING_KEYS.length} textes couvrent tous les écrans de la borne : accueil, tarifs, paiement carte, éjection, retour, reçu et erreurs`:`${WEB_STRING_KEYS.length} textes couvrent le parcours web (page /rent). Le français fonctionne toujours, même sans aucune traduction publiée ici.`} action={
   <Dialog><DialogTrigger asChild><Button variant="outline">Ajouter une langue</Button></DialogTrigger><DialogContent>
-   <DialogHeader><DialogTitle>Nouvelle langue</DialogTitle><DialogDescription>La borne proposera cette langue aux clients une fois les textes publiés.</DialogDescription></DialogHeader>
+   <DialogHeader><DialogTitle>Nouvelle langue</DialogTitle><DialogDescription>La borne et le site proposeront cette langue aux clients une fois les textes publiés.</DialogDescription></DialogHeader>
    <label className="field-label">Code<Input value={newLocale.code} maxLength={10} onChange={e=>setNewLocale({...newLocale,code:e.target.value})} placeholder="en"/></label>
    <label className="field-label">Nom affiché<Input value={newLocale.label} maxLength={60} onChange={e=>setNewLocale({...newLocale,label:e.target.value})} placeholder="English"/></label>
    <label className="field-label">Locale complète<Input value={newLocale.locale} maxLength={20} onChange={e=>setNewLocale({...newLocale,locale:e.target.value})} placeholder="en-GB"/></label>
    <Button className="cta" onClick={addLocale}>Ajouter</Button>
   </DialogContent></Dialog>
  }/>
+  <Tabs value={surface} onValueChange={v=>setSurface(v as 'kiosk'|'web')}><TabsList><TabsTrigger value="kiosk">Écrans de la borne</TabsTrigger><TabsTrigger value="web">Parcours web (/rent)</TabsTrigger></TabsList></Tabs>
   <div className="filter-row"><Picker label="Langue en cours d’édition" value={active} onChange={setActive} options={locales.map(l=>({value:l.locale,label:l.label}))}/>
    <Picker label="Langue par défaut" value={defaultLocale} onChange={setDefaultLocale} options={locales.map(l=>({value:l.locale,label:`Défaut : ${l.label}`}))}/></div>
   <div className="health-row"><span>Avancement de « {locales.find(l=>l.locale===active)?.label??active} »</span>
-   <div className="charge-bar" style={{minWidth:200}}><span style={{width:`${Math.round(translated/RUNTIME_STRING_KEYS.length*100)}%`}}/>{translated} / {RUNTIME_STRING_KEYS.length}</div></div>
-  {active!==defaultLocale&&translated<RUNTIME_STRING_KEYS.length&&<p className="small muted">Les textes manquants s’afficheront dans la langue par défaut, jamais en blanc.</p>}
+   <div className="charge-bar" style={{minWidth:200}}><span style={{width:`${Math.round(translated/keys.length*100)}%`}}/>{translated} / {keys.length}</div></div>
+  {surface==='kiosk'&&active!==defaultLocale&&translated<keys.length&&<p className="small muted">Les textes manquants s’afficheront dans la langue par défaut, jamais en blanc.</p>}
+  {surface==='web'&&translated<keys.length&&<p className="small muted">Les textes manquants de cette langue s’affichent en français, jamais en blanc ni en clé brute.</p>}
   <label className="field-label" style={{flexDirection:'row',alignItems:'center',gap:8}}><Checkbox checked={onlyMissing} onCheckedChange={v=>setOnlyMissing(v===true)}/>N’afficher que les textes manquants</label>
   <div style={{maxHeight:420,overflowY:'auto',display:'grid',gap:10}}>
    {visibleKeys.map(key=><label className="field-label" key={key}><span className="small muted">{key}</span>
@@ -322,7 +326,7 @@ function TranslationsEditor({data,refresh}:{data:Dashboard;refresh:()=>Promise<v
    {!visibleKeys.length&&<Empty>Tous les textes de cette langue sont traduits.</Empty>}
   </div>
   <label className="field-label">Bornes concernées<Picker label="Bornes concernées" value={targets.length?targets[0]:'all'} onChange={v=>setTargets(v==='all'?[]:[v])} options={[{value:'all',label:`Toutes les bornes (${data.stations.length})`},...data.stations.map(s=>({value:s.id,label:`${s.venue.name} · ${s.publicId}`}))]}/></label>
-  <Button className="cta" disabled={busy||!data.stations.length||!RUNTIME_STRING_KEYS.filter(k=>strings[defaultLocale]?.[k]?.trim()).length} onClick={()=>void publish()}>{busy&&<Busy/>}Publier sur {stations.length} borne{stations.length>1?'s':''}</Button>
+  <Button className="cta" disabled={busy||!data.stations.length||![...RUNTIME_STRING_KEYS,...WEB_STRING_KEYS].filter(k=>strings[defaultLocale]?.[k]?.trim()).length} onClick={()=>void publish()}>{busy&&<Busy/>}Publier sur {stations.length} borne{stations.length>1?'s':''}</Button>
  </section>;
 }
 /**

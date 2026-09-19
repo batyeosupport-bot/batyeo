@@ -41,3 +41,40 @@ export function missingStringKeys(translations:RuntimeTranslations,locale:string
 export function resolveStrings(translations:RuntimeTranslations,locale:string):Record<string,string>{
  return {...translations.strings[translations.defaultLocale],...(translations.strings[locale]??{})};
 }
+
+/**
+ * Copy for the customer-facing web rental flow (components/batyeo/rental.tsx) — a separate,
+ * smaller inventory from RUNTIME_STRING_KEYS, because the kiosk's own list assumes a physical
+ * card/NFC terminal (insertCard, swipeCard…) that has no equivalent in a browser tab. Kept in the
+ * same admin editor and the same per-station RuntimeTranslations.strings dictionary (still just
+ * Record<string,string>, nothing stops the two lists sharing it), but tracked separately so a
+ * station's "kiosk translation completeness" isn't diluted by web-only keys it may never need.
+ *
+ * WEB_DEFAULT_STRINGS_FR is the load-bearing part: unlike the kiosk, which has no built-in
+ * fallback and shows the raw key name when a dictionary is empty (see MainActivity.kt's
+ * `translate()`), this page collects real payments and must never degrade to that. A station
+ * with zero admin-configured translations still renders exactly the current French copy — other
+ * locales are additive, never a prerequisite.
+ */
+export const WEB_STRING_KEYS=['web_intro_eyebrow','web_intro_perHour','web_intro_max','web_intro_deposit','web_intro_returnWithin','web_intro_acceptPrefix','web_intro_acceptTermsLink','web_intro_acceptSuffix','web_intro_cta','web_intro_securityNote','web_intro_offline','web_intro_noBattery','web_intro_available','web_busy_eyebrow','web_busy_authorizing','web_busy_preparing','web_busy_stayNearby','web_busy_preparingRental','web_busy_dontClose','web_active_eyebrow','web_active_title','web_active_body','web_active_duration','web_active_currentPrice','web_active_returnBefore','web_active_startStation','web_active_reference','web_active_overdue','web_active_cta','web_receipt_eyebrow','web_receipt_title','web_receipt_body','web_receipt_amount','web_receipt_totalDuration','web_receipt_depositReleased','web_receipt_amountAuthorized','web_receipt_reference','web_receipt_returnedAt','web_receipt_note','web_receipt_print','web_receipt_newRental'] as const;
+export type WebStringKey=typeof WEB_STRING_KEYS[number];
+export const WEB_DEFAULT_STRINGS_FR:Readonly<Record<WebStringKey,string>>={
+ web_intro_eyebrow:'VOUS ÊTES AU BON ENDROIT',web_intro_perHour:'/ heure commencée',web_intro_max:'Maximum',web_intro_deposit:'Caution temporaire',web_intro_returnWithin:'Retour sous',
+ web_intro_acceptPrefix:'J’accepte les ',web_intro_acceptTermsLink:'conditions de location',web_intro_acceptSuffix:' et l’autorisation simulée de {amount}.',
+ web_intro_cta:'PRENDRE UNE BATTERIE',web_intro_securityNote:'Paiement simulé. Aucune carte nécessaire.',web_intro_offline:'Station hors ligne. Choisissez une autre station.',web_intro_noBattery:'Aucune batterie disponible pour le moment.',web_intro_available:'{count} batterie{plural} disponible{plural}',
+ web_busy_eyebrow:'UN INSTANT, ON S’OCCUPE DE TOUT',web_busy_authorizing:'Autorisation simulée…',web_busy_preparing:'Préparation de votre batterie…',web_busy_stayNearby:'Restez près de la station. Ne relancez pas la demande.',web_busy_preparingRental:'Préparation de votre location…',web_busy_dontClose:'Ne fermez pas cette page. Ça ne prend que quelques secondes.',
+ web_active_eyebrow:'VOTRE BATTERIE EST PRÊTE',web_active_title:'La suite vous appartient.',web_active_body:'Récupérez la batterie à la station. Gardez cette page pour suivre votre location.',web_active_duration:'Durée de location',web_active_currentPrice:'Prix actuel · max. {cap}',web_active_returnBefore:'À rendre avant',web_active_startStation:'Station de départ',web_active_reference:'Référence',
+ web_active_overdue:'Le délai de retour est dépassé. Rendez votre batterie dès que possible : le plafond tarifaire reste inchangé, mais si elle n’est toujours pas rendue 48 h après ce message, votre caution de {deposit} sera intégralement débitée pour perte définitive.',
+ web_active_cta:'Trouver une station pour la rendre',
+ web_receipt_eyebrow:'BATTERIE RENDUE',web_receipt_title:'À la prochaine recharge.',web_receipt_body:'Votre location est terminée.',web_receipt_amount:'Montant final simulé',web_receipt_totalDuration:'Durée totale',web_receipt_depositReleased:'Caution libérée',web_receipt_amountAuthorized:'Montant autorisé',web_receipt_reference:'Référence',web_receipt_returnedAt:'Retour',web_receipt_note:'Reçu de démonstration. Aucun débit bancaire.',web_receipt_print:'Imprimer / enregistrer le reçu',web_receipt_newRental:'Nouvelle location',
+};
+/** Keys a locale still owes for the web flow, mirroring missingStringKeys — never includes French, which always has the built-in baseline. */
+export function missingWebStringKeys(translations:RuntimeTranslations,locale:string):WebStringKey[]{
+ if(locale==='fr-FR')return [];
+ const dictionary=translations.strings[locale]??{};
+ return WEB_STRING_KEYS.filter(key=>!dictionary[key]?.trim());
+}
+/** French (built into the code, never dependent on admin configuration) overlaid with whatever an admin has translated for `locale`. Unlike resolveStrings, tolerates translations being entirely absent. */
+export function resolveWebStrings(translations:RuntimeTranslations|null,locale:string):Record<WebStringKey,string>{
+ return {...WEB_DEFAULT_STRINGS_FR,...(translations?.strings[locale]??{})};
+}

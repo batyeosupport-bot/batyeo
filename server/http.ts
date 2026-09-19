@@ -124,6 +124,10 @@ async function route(request:Request,path:string){
   const d=await repository.read();const actor=await actorFor(request,d);
   if(path==='health')return reply({status:'ok',demo:options.demo,providers:{payment:paymentMode,station:'mock',manufacturer:manufacturerProvider?'read_only':'not_configured'},manufacturerHealth:providerHealth(d),serverTime:Date.now()});
   if(path==='public')return reply({stations:stationViews(d).filter(s=>!s.archivedAt),pricing:d.pricing[0],demo:options.demo});
+  if(path.startsWith('translations/')){
+   const config=displayConfigFor(d,path.split('/')[1]);
+   return reply({locale:config.locale,translations:config.translations});
+  }
   if(path==='me')return reply({user:actor?{...actor,name:d.users.find(u=>u.id===actor.id)?.name}:null});
   if(path==='customer'){
    const existing=customerToken(request);
