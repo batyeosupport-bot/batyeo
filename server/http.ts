@@ -19,6 +19,9 @@ import type {Actor,Data,StationHeartbeatRecord} from '../core/types';
 import {createStation,createVenue,updateVenue,publicQrUrl,setStripeTerminalLocation,blockStationRentals,unblockStationRentals,archiveStation,restoreStation,relocateStation,setPartnerCommission} from '../core/station-admin';
 import {createMedia,setMediaStatus} from '../core/media-admin';
 import {COMMISSION_TIERS_BPS} from '../core/pricing';
+import {handleUpload,type HandleUploadBody} from '@vercel/blob/client';
+/** Media kinds accepted for the admin upload button, mapped to what Vercel Blob will actually accept for that kind. */
+const MEDIA_UPLOAD_LIMITS={IMAGE:{types:['image/jpeg','image/png','image/webp','image/gif'],maxBytes:15*1024*1024},VIDEO:{types:['video/mp4','video/webm','video/quicktime'],maxBytes:150*1024*1024}} as const;
 
 const engine=new RentalEngine();
 const station=new MockBatteryStationProvider();
@@ -27,7 +30,7 @@ const id=z.string().min(1).max(100);
 const heartbeatSchema=z.object({runtimeVersion:z.string().min(1).max(50),configVersion:z.number().int().nonnegative().optional(),network:z.enum(['ONLINE','OFFLINE','DEGRADED']),appUptimeMs:z.number().int().nonnegative(),displayStatus:z.enum(['OK','ERROR','MAINTENANCE']),providerStatus:z.string().max(50).nullable(),lastCoreContactAt:z.number().int().nonnegative().nullable(),freeStorageBytes:z.number().int().nonnegative().nullable().optional(),localErrorCount:z.number().int().nonnegative().optional(),applicationHealth:z.enum(['OK','DEGRADED','ERROR']).optional(),errors:z.array(z.string().max(500)).max(20)});
 const reply=(body:unknown,status=200,headers:Record<string,string>={})=>Response.json(body,{status,headers:{'Cache-Control':'no-store','X-Content-Type-Options':'nosniff',...headers}});
 function audit(d:Data,a:Actor,action:string){d.audits.push({id:crypto.randomUUID(),userId:a.id,action,at:Date.now()});}
-export function createApi(repository:Repository,options:{demo:boolean;allowLegacyCredentials:boolean},dependencies:{stripeProvider?:Pick<StripePaymentProvider,'authorize'|'capture'|'release'>;manufacturerProvider?:Pick<ManufacturerBatteryStationProvider,'getDeviceInfo'|'listDevices'>;batteryEjector?:AsyncBatteryEjector}={}) {
+export function createApi(repository:Repository,options:{demo:boolean;allowLegacyCredentials:boolean},dependencies:{stripeProvider?:Pick<StripePaymentProvider,'authorize'|'capture'|'release'>;manufacturerProvider?:Pick<ManufacturerBatteryStationProvider,'getDeviceInfo'|'listDevices'>;batteryEjector?:AsyncBatteryEjector;handleMediaUpload?:typeof handleUpload}={}) {
  // A bad deployment config (a malformed key, an inconsistent flag combination) must surface as the
  // same clean {error, status} JSON as any other DomainError, not as an opaque empty 500: this used
  // to throw straight out of createApi(), before handle()'s try/catch even exists to catch it —
@@ -338,9 +341,25 @@ async function route(request:Request,path:string){
    return {partner};
   }));
  }
+ if(path==='media/upload-token'){
+  authorize(actor,'settings');
+  const handler=dependencies.handleMediaUpload??handleUpload;
+  let jsonResponse:Awaited<ReturnType<typeof handleUpload>>;
+  try{
+   jsonResponse=await handler({
+    body:body as HandleUploadBody,request,
+    onBeforeGenerateToken:async(_pathname,clientPayload)=>{
+     const kind=z.enum(['IMAGE','VIDEO']).catch('IMAGE').parse(clientPayload);
+     const limits=MEDIA_UPLOAD_LIMITS[kind];
+     return {allowedContentTypes:[...limits.types],maximumSizeInBytes:limits.maxBytes,addRandomSuffix:true};
+    },
+   });
+  }catch(e){throw new DomainError(e instanceof Error?e.message:'Le stockage de médias (Vercel Blob) est indisponible. Vérifiez qu’il est activé pour ce projet.',503);}
+  return reply(jsonResponse);
+ }
  if(path==='media/create'){
   authorize(actor,'settings');
-  const input=z.object({name:z.string().trim().min(1).max(120),kind:z.enum(['IMAGE','VIDEO']),uri:z.string().url(),durationMs:z.number().int().min(1000).max(86_400_000),startsAt:z.number().int().nullable().optional(),endsAt:z.number().int().nullable().optional(),targetStationIds:z.array(id).max(200).optional()}).strict().parse(body);
+  const input=z.object({name:z.string().trim().min(1).max(120),kind:z.enum(['IMAGE','VIDEO']),uri:z.string().url(),durationMs:z.number().int().min(1000).max(86_400_000),startsAt:z.number().int().nullable().optional(),endsAt:z.number().int().nullable().optional(),targetStationIds:z.array(id).max(200).optional(),checksum:z.string().trim().min(1).max(200).optional()}).strict().parse(body);
   return reply(await write('settings',(d,current)=>{
    if(current.role==='PARTNER_ADMIN'){
     if(!input.targetStationIds?.length)throw new DomainError('Sélectionnez au moins une station de votre établissement.',400);
