@@ -70,19 +70,33 @@ En production aujourd'hui, **aucune action physique réelle n'a lieu** :
 `runtime/TerminalManager.kt` sait découvrir et connecter un lecteur Bluetooth BBPOS WisePOS, et attend une Location Stripe (bouton admin déjà construit). Il s'arrête **volontairement** avant `createPaymentIntent → collectPaymentMethod → confirmPaymentIntent` (commentaire explicite aux lignes 31-32). Décision produit encore ouverte : réutiliser le lecteur déjà dans la borne ou en acheter un dédié.
 
 ### C. Comptes et accès — **fait le 2026-09-19** (`core/accounts.ts`, section « Équipe » du portail)
-Changement de mot de passe en libre-service (`settings/password`, coupe les autres sessions), création de compte pour un partenaire existant (`team/create`), désactivation/réactivation immédiate (`team/set-disabled`), nouveau mot de passe temporaire généré par un admin (`team/reset-password`, affiché une seule fois). Un PARTNER_ADMIN ne voit et ne gère que son partenaire ; un ADMIN ne touche pas un SUPER_ADMIN ; personne ne peut se désactiver soi-même. **Pas encore fait** : réinitialisation par email « mot de passe oublié » (il n'y a aucun envoi d'email dans le projet) ; la section n'a été vérifiée que par tests, `tsc`, ESLint et `pnpm build` — **jamais ouverte dans un navigateur** (pas de base locale jetable câblée ; ne jamais lancer `dev` contre `.env`).
+Changement de mot de passe en libre-service (`settings/password`, coupe les autres sessions), création de compte pour un partenaire existant (`team/create`), désactivation/réactivation immédiate (`team/set-disabled`), nouveau mot de passe temporaire généré par un admin (`team/reset-password`, affiché une seule fois). Un PARTNER_ADMIN ne voit et ne gère que son partenaire ; un ADMIN ne touche pas un SUPER_ADMIN ; personne ne peut se désactiver soi-même. **Pas encore fait** : réinitialisation par email « mot de passe oublié » (il n'y a aucun envoi d'email dans le projet) ; interface **vérifiée dans un vrai Chrome le 2026-09-19** (création de compte, désactivation, changement de mot de passe, dialogue média) via `node scripts/ui-check.mjs` après `pnpm build` : il monte l'app sur une base D1 jetable en mémoire, sans jamais lire `.env`.
 
 ### D. Panneau d'état du système — **fait le 2026-09-19** (section « Système », personnel BATYEO seulement)
-Route `system/status` : mode de paiement, fournisseur de la borne, verrou d'éjection physique, santé de la synchronisation, en langage courant. Même réserve que C : testé et compilé, jamais vu dans un navigateur.
+Route `system/status` : mode de paiement, fournisseur de la borne, verrou d'éjection physique, santé de la synchronisation, en langage courant. Vérifié dans Chrome (un défaut d'affichage des pastilles a été trouvé et corrigé à cette occasion).
 
 ### E. Reste de moindre priorité
 - **Activer Vercel Blob** (Storage → Create → Blob) : sans ça le bouton de téléversement des médias renvoie une erreur claire mais ne fonctionne pas. Geste tableau de bord, côté utilisateur.
 - ~~Écrans rares du parcours client non traduits~~ — **fait le 2026-09-19** : échec, retour en cours, vérification, annulation/expiration et batterie perdue passent par `web_failed_*`, `web_returning_*`, `web_review_*`, `web_cancelled_*`, `web_lost_*` (français codé en dur en repli ; `\n` = retour à la ligne dans les titres). Restent codés en dur : « Besoin d’aide ? », « Les stations », le bandeau « MODE DÉMO » et le libellé « Langue ».
 - ~~Médias pour les partenaires~~ — **fait le 2026-09-19** : la section « Affichage » apparaît pour un PARTNER_ADMIN (pas PARTNER_USER) ; il ne voit et ne crée que des médias visant *exclusivement* ses propres stations (les pubs « toutes stations » et celles d'un autre partenaire lui restent invisibles). Un média multi-partenaires créé par le personnel joue sur sa borne sans qu'il le voie. Jamais vu dans un navigateur.
 - **App mobile cliente** : jamais lancée sur un vrai appareil (pas d'émulateur Android sur cette machine ; un simulateur iOS existe, jamais essayé).
-- **`pnpm test:integration` échoue** pour une raison **préexistante et sans rapport** : le schéma D1 sous `drizzle/` n'a jamais eu la table `displayConfigs` — cible Cloudflare Workers visiblement abandonnée au profit de Vercel + Postgres. À supprimer ou à remettre à niveau, mais ce n'est pas une régression.
+- ~~`pnpm test:integration` échouait~~ — **corrigé** : il manquait deux tables (`displayConfigs`, `stationHeartbeats`) dans `drizzle/`, migration `0008` ajoutée. La cible D1/Workers n'est pas abandonnée : `pnpm dev`, `pnpm build` et le smoke test navigateur en dépendent (Vercel utilise Postgres).
 
 ---
+
+## Bilan de complétude (2026-09-19) — le projet n'est PAS fini pour de vrais clients
+
+Ce qui est solide : le cœur métier, l'admin/partenaire, les comptes, l'affichage, le parcours web, la démo de bout en bout (274 tests, `test:sql`, `test:integration`, build, smoke test navigateur).
+
+Ce qui sépare encore la démo d'un lancement, par ordre de gravité :
+1. **Aucun vrai paiement n'est possible** : `core/payment-mode.ts` interdit volontairement Stripe Live (`PaymentMode='mock'|'stripe_test'`). Passer en réel = décision + chantier (clés live, conformité, copy « paiement simulé » à retirer, conditions `demo-2026-09-v1` à remplacer par de vraies CGU).
+2. **La boucle physique est ouverte** : éjection réelle verrouillée (attente du fournisseur), retour réel codé mais alimenté par aucun webhook, et l'invariant `orphan rental battery` bloque une vraie éjection.
+3. **Aucune tâche planifiée n'est configurée** (`vercel.json` n'a pas de `crons`) : ni la synchronisation fournisseur (`internal/manufacturer/sync`, secret `MANUFACTURER_SYNC_SECRET`), ni la capture de caution après 48 h de retard (`internal/rentals/capture-overdue-losses`, secret `OVERDUE_CAPTURE_SECRET`) ne tournent seules. Sans cron, une batterie non rendue n'est jamais facturée et la détection de retour ne se déclenche que par webhook ou synchro manuelle. À câbler côté Vercel (plan Hobby = cron quotidien seulement).
+4. **Le modèle local des slots n'est pas la réalité de la borne réelle** : la disponibilité vue par le client vient des slots locaux, pas du snapshot fournisseur.
+5. **Paiement par carte sur la borne** non construit (décision produit ouverte).
+6. **Pas d'email** (aucun envoi : pas de « mot de passe oublié », pas de reçu par mail) ni de **surveillance d'erreurs** (rien d'autre que `console.error`).
+7. **App mobile** jamais lancée sur un appareil ; **Vercel Blob** à activer ; RGPD/mentions légales non traitées.
+
 
 ## Méthode de travail attendue
 
