@@ -102,3 +102,11 @@ test('missingWebStringKeys treats French as always complete and reports real gap
  assert.ok(!missing.includes('web_intro_cta'));
  assert.equal(missing.length,WEB_STRING_KEYS.length-1);
 });
+
+test('the rare rental screens (failed, returning, under review, cancelled/expired, lost) are all translatable and never render a raw key',()=>{
+ for(const prefix of ['web_failed_','web_returning_','web_review_','web_cancelled_','web_lost_'])assert.ok(WEB_STRING_KEYS.some(k=>k.startsWith(prefix)),`no keys for ${prefix}`);
+ const english:RuntimeTranslations={defaultLocale:'fr-FR',available:[{code:'fr',label:'Français',locale:'fr-FR'},{code:'en',label:'English',locale:'en-US'}],strings:{'fr-FR':{},'en-US':{web_lost_title:'Your deposit\nwas charged.'}}};
+ const resolved=resolveWebStrings(english,'en-US');
+ assert.equal(resolved.web_lost_title,'Your deposit\nwas charged.');
+ assert.equal(resolved.web_lost_eyebrow,'BATTERIE JAMAIS RESTITUÉE','an untranslated key falls back to the French baseline on the page that bills a lost battery');
+});
