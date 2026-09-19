@@ -82,3 +82,15 @@ test('the dashboard exposes the team only to roles that can manage it, scoped to
  assert.deepEqual(teamFor(d,{id:'finance',role:'FINANCE',partnerId:null}),[]);
  assert.equal(teamFor(d,{id:'admin-demo',role:'SUPER_ADMIN',partnerId:null}).length,d.users.length);
 });
+
+test('system/status tells BATYEO staff the lock is closed and payment mode, and is refused to partners',async()=>{
+ const repo=new MemoryRepository(seedData('x'));
+ const get=(token:string)=>createApi(repo,{demo:true,allowLegacyCredentials:true},{}).GET(new Request(origin+'/api/core/system/status',{headers:{cookie:`batyeo_session=${token}`}}),{params:Promise.resolve({path:['system','status']})});
+ const ok=await get(await session(repo,'support'));
+ assert.equal(ok.status,200);
+ const body=await ok.json() as {payment:string;manufacturer:string;physicalActions:boolean;manufacturerHealth:{status:string}};
+ assert.equal(body.physicalActions,false,'the panel must report the physical lock as closed by default');
+ assert.equal(body.payment,'mock');assert.equal(body.manufacturer,'not_configured');assert.equal(body.manufacturerHealth.status,'UNKNOWN');
+ assert.equal((await get(await session(repo,'partner-demo'))).status,403);
+ assert.equal((await get('x'.repeat(40))).status,401);
+});

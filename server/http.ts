@@ -38,10 +38,10 @@ export function createApi(repository:Repository,options:{demo:boolean;allowLegac
  // confirmed live on 2026-09-19 when a misconfigured STRIPE_SECRET_KEY produced exactly that empty
  // response instead of the "Stripe TEST nécessite STRIPE_SECRET_KEY." message it was throwing.
  let paymentMode:PaymentMode,manufacturerProvider:Pick<ManufacturerBatteryStationProvider,'getDeviceInfo'|'listDevices'>|undefined,manufacturerSync:ManufacturerSyncService|undefined,batteryEjector:AsyncBatteryEjector|undefined,stripeCoordinator:StripeRentalCoordinator|undefined;
- let startupError:unknown;
+ let startupError:unknown,physicalActionsAllowed=false;
  try {
   const runtimeEnv=typeof process!=='undefined'?process.env:{};paymentMode=resolvePaymentMode(runtimeEnv);validateManufacturerStartup(runtimeEnv);
-  const manufacturerConfig=resolveManufacturerConfig(runtimeEnv);const manufacturerClient=manufacturerConfig?new ManufacturerHttpClient(manufacturerConfig):undefined;
+  const manufacturerConfig=resolveManufacturerConfig(runtimeEnv);physicalActionsAllowed=Boolean(manufacturerConfig?.allowPhysicalActions);const manufacturerClient=manufacturerConfig?new ManufacturerHttpClient(manufacturerConfig):undefined;
   manufacturerProvider=dependencies.manufacturerProvider??(manufacturerClient?new ManufacturerBatteryStationProvider(manufacturerClient):undefined);
   manufacturerSync=manufacturerProvider?new ManufacturerSyncService(repository,manufacturerProvider,{onReturnDetected:(c,at)=>stripeCoordinator?stripeCoordinator.return(repository,c.rentalId,c.stationId,at,true):repository.transaction(d=>engine.return(d,c.rentalId,c.stationId,at,true))}):undefined;
   // Only ever constructed on an explicit opt-in that validateManufacturerStartup has already found
@@ -154,6 +154,7 @@ async function route(request:Request,path:string){
   if(path==='customer/history'){
    const token=customerToken(request);if(!token)throw new DomainError('Session client manquante.',401);const customerId=requireCustomer(d,await sha256(token));return reply({rentals:d.rentals.filter(r=>r.customerId===customerId).sort((a,b)=>b.createdAt-a.createdAt).map(r=>customerRentalView(d,r)),serverTime:Date.now()});
   }
+  if(path==='system/status'){authorize(actor,'read');if(actor!.role.startsWith('PARTNER_'))throw new DomainError('Accès non autorisé.',403);return reply({payment:paymentMode,manufacturer:manufacturerProvider?'read_only':'not_configured',physicalActions:physicalActionsAllowed,manufacturerHealth:providerHealth(d),serverTime:Date.now()});}
   if(path==='dashboard'){authorize(actor,'read');if(d.rentals.some(r=>r.state==='ACTIVE'&&r.deadline!==null&&Date.now()+r.simulatedMinutes*60000>r.deadline)){await repository.transaction(next=>engine.refreshOverdue(next));return reply(dashboard(await repository.read(),actor!));}return reply(dashboard(d,actor!));}
   if(path==='manufacturer/stations'){authorize(actor,'operate');if(!manufacturerProvider)throw new DomainError('Provider fabricant non configuré.',503);const search=new URL(request.url).searchParams;const query=z.object({coordType:z.string().min(1).max(30),zoomLevel:z.coerce.number().int(),lat:z.coerce.number().finite(),lng:z.coerce.number().finite(),showPrice:z.enum(['true','false']).transform(value=>value==='true')}).parse(Object.fromEntries(search));return reply({stations:await manufacturerProvider.listDevices(query)});}
   // Read of the merchant's own Stripe account, so an operator can reuse a Location it already has
