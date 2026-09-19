@@ -10,6 +10,7 @@ import {StripeRentalCoordinator,type AsyncBatteryEjector} from '../core/stripe-c
 import {resolvePaymentMode,type PaymentMode} from '../core/payment-mode';
 import {ManufacturerBatteryEjector,ManufacturerBatteryStationProvider,ManufacturerHttpClient,reconcileManufacturerStation,resolveManufacturerConfig,validateManufacturerStartup} from '../core/manufacturer';
 import {ManufacturerSyncService,linkManufacturerStation} from '../core/manufacturer-sync';
+import {MIN_PASSWORD_LENGTH,TEAM_ROLES,applyOwnPassword,createTeamMember,resetUserPassword,setUserDisabled} from '../core/accounts';
 import {providerHealth} from '../core/manufacturer-sync';
 import {dashboard,rentalView,customerRentalView,stationViews,stationDisplaySnapshot,displayConfigFor,canViewFinance} from '../core/queries';
 import {checksumConfig} from '../core/runtime-config';
@@ -567,6 +568,38 @@ async function route(request:Request,path:string){
  }
  if(path==='resolve-ticket'){
   authorize(actor,'support');const input=z.object({id}).strict().parse(body);await write('support',(d,actor)=>{const t=d.tickets.find(t=>t.id===input.id);if(!t)throw new DomainError('Demande introuvable.',404);assertTenant(actor!,t.partnerId);t.status='RESOLVED';audit(d,actor!,'Demande résolue : '+t.id);});return reply({ok:true});
+ }
+ if(path==='settings/password'){
+  authorize(actor,'read');
+  const input=z.object({currentPassword:z.string().min(1).max(200),newPassword:z.string().min(MIN_PASSWORD_LENGTH,`Le nouveau mot de passe doit faire au moins ${MIN_PASSWORD_LENGTH} caractères.`).max(200)}).strict().parse(body);
+  await repository.transaction(d=>{rateLimit(d,`password-${actor!.id}`,6);});
+  const me=(await repository.read()).users.find(u=>u.id===actor!.id);
+  // 403, not 401: the portal treats a 401 as "logged out" and would bounce the user to the login page.
+  if(!me||!(await verifyPassword(input.currentPassword,me.passwordHash,options.allowLegacyCredentials)))throw new DomainError('Mot de passe actuel incorrect.',403);
+  if(input.newPassword===input.currentPassword)throw new DomainError('Choisissez un mot de passe différent de l’actuel.',400);
+  const newHash=await createPasswordHash(input.newPassword);
+  await repository.transaction(d=>{applyOwnPassword(d,actor!.id,me.passwordHash,newHash,digest??'');audit(d,actor!,'Mot de passe modifié');});
+  return reply({ok:true});
+ }
+ if(path==='team/create'){
+  authorize(actor,'settings');
+  const input=z.object({name:z.string().trim().min(2).max(80),email:z.string().trim().email().max(200),role:z.enum(TEAM_ROLES),partnerId:id.optional()}).strict().parse(body);
+  const temporaryPassword=crypto.randomUUID().replace(/-/g,'').slice(0,16); // shown once in the response, never logged
+  const passwordHash=await createPasswordHash(temporaryPassword);
+  const member=await write('settings',(d,current)=>{const user=createTeamMember(d,current,input,passwordHash);audit(d,current,`Compte créé · ${user.email} (${user.role})`);return {id:user.id,email:user.email,name:user.name,role:user.role};});
+  return reply({member,temporaryPassword},201);
+ }
+ if(path==='team/set-disabled'){
+  authorize(actor,'settings');const input=z.object({userId:id,disabled:z.boolean()}).strict().parse(body);
+  await write('settings',(d,current)=>{const user=setUserDisabled(d,current,input.userId,input.disabled);audit(d,current,`Compte ${input.disabled?'désactivé':'réactivé'} · ${user.email}`);});
+  return reply({ok:true});
+ }
+ if(path==='team/reset-password'){
+  authorize(actor,'settings');const input=z.object({userId:id}).strict().parse(body);
+  const temporaryPassword=crypto.randomUUID().replace(/-/g,'').slice(0,16);
+  const passwordHash=await createPasswordHash(temporaryPassword);
+  const email=await write('settings',(d,current)=>{const user=resetUserPassword(d,current,input.userId,passwordHash);audit(d,current,`Mot de passe réinitialisé · ${user.email}`);return user.email;});
+  return reply({email,temporaryPassword});
  }
  if(path==='settings'){
   authorize(actor,'settings');const input=z.object({name:z.string().trim().min(2).max(80)}).strict().parse(body);await write('settings',(d,actor)=>{const u=d.users.find(u=>u.id===actor.id)!;u.name=input.name;audit(d,actor!,'Profil mis à jour');});return reply({ok:true});
