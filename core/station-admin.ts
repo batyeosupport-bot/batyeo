@@ -130,3 +130,39 @@ export function updateVenue(d:Data,venueId:string,input:VenueFields,now=Date.now
  if(moved)for(const s of d.stations.filter(s=>s.venueId===venue.id&&s.stripeTerminalLocationId)){s.stripeTerminalLocationId=null;s.stripeTerminalLocationUpdatedAt=now;}
  return venue;
 }
+
+export const INVENTORY_SNAPSHOT_MAX_AGE_MS=10*60_000;
+/**
+ * Makes BATYEO's own slot/battery records mirror what the manufacturer's cabinet/query says is
+ * physically in the cabinet. A real ejection names a manufacturer battery id; the coordinator then
+ * requires that id to sit AVAILABLE in a local slot, and refuses (409) otherwise — after the
+ * battery has already left. So without this, a real ejection would hand out a battery while
+ * failing the rental and releasing the deposit. Explicit and admin-triggered, never automatic:
+ * sync stays read-only. Refuses stations whose current batteries carry rental history (demo
+ * stations): those rows cannot be deleted without orphaning past rentals, so a real cabinet
+ * belongs on a fresh station. Charge is not known (the supplier only gives a voltage with no
+ * documented conversion), so it is stored as 100 to avoid raising false low-battery alerts.
+ */
+export function adoptProviderInventory(d:Data,stationId:string,now=Date.now()):{batteries:number;slots:number} {
+ const station=d.stations.find(s=>s.id===stationId);if(!station)throw new DomainError('Station introuvable.',404);
+ const link=d.stationProviderLinks.find(l=>l.stationId===stationId&&l.active);if(!link)throw new DomainError('Cette station n’est associée à aucune borne fabricant.',409);
+ const snapshot=d.stationProviderSnapshots.find(s=>s.linkId===link.id);
+ if(!snapshot||snapshot.syncedAt<now-INVENTORY_SNAPSHOT_MAX_AGE_MS)throw new DomainError('Aucune lecture récente de la borne : lancez d’abord une synchronisation fabricant.',409);
+ if(!snapshot.online)throw new DomainError('La borne est hors ligne : impossible de connaître son contenu réel.',409);
+ if(d.rentals.some(r=>r.stationId===stationId&&OPEN_STATES.includes(r.state)))throw new DomainError('Des locations sont en cours à cette station.',409);
+ const ownSlots=d.slots.filter(s=>s.stationId===stationId),ownBatteryIds=new Set(ownSlots.flatMap(s=>s.batteryId?[s.batteryId]:[]));
+ if(d.rentals.some(r=>r.batteryId!==null&&ownBatteryIds.has(r.batteryId))||d.tickets.some(t=>t.batteryId&&ownBatteryIds.has(t.batteryId)))throw new DomainError('Cette station porte un historique de démonstration : créez une station neuve pour la borne réelle.',409);
+ const incoming=snapshot.slots.flatMap(s=>s.batteryId?[s.batteryId]:[]);
+ if(new Set(incoming).size!==incoming.length)throw new DomainError('La borne annonce deux fois la même batterie.',409);
+ for(const id of incoming)if(d.batteries.some(b=>b.id===id&&!ownBatteryIds.has(id)))throw new DomainError('Une batterie de cette borne existe déjà ailleurs dans BATYEO.',409);
+ if(snapshot.slots.some(s=>!Number.isInteger(s.position)||s.position<1||s.position>snapshot.totalSlots))throw new DomainError('Positions de slot incohérentes côté fabricant.',409);
+ d.batteries=d.batteries.filter(b=>!ownBatteryIds.has(b.id));
+ d.slots=d.slots.filter(s=>s.stationId!==stationId);
+ station.capacity=snapshot.totalSlots;
+ for(let position=1;position<=snapshot.totalSlots;position++){
+  const provided=snapshot.slots.find(s=>s.position===position)?.batteryId??null;
+  d.slots.push({id:crypto.randomUUID(),stationId,position,batteryId:provided});
+  if(provided)d.batteries.push({id:provided,charge:100,status:'AVAILABLE'});
+ }
+ return {batteries:incoming.length,slots:snapshot.totalSlots};
+}

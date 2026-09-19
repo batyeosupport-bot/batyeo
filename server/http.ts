@@ -17,7 +17,7 @@ import {checksumConfig} from '../core/runtime-config';
 import {heartbeatHealth} from '../core/heartbeat';
 import {validateTranslations} from '../core/i18n';
 import type {Actor,Data,StationHeartbeatRecord} from '../core/types';
-import {createStation,createVenue,updateVenue,publicQrUrl,setStripeTerminalLocation,blockStationRentals,unblockStationRentals,archiveStation,restoreStation,relocateStation,setPartnerCommission,createPartner} from '../core/station-admin';
+import {createStation,createVenue,updateVenue,publicQrUrl,setStripeTerminalLocation,blockStationRentals,unblockStationRentals,archiveStation,restoreStation,relocateStation,setPartnerCommission,createPartner,adoptProviderInventory} from '../core/station-admin';
 import {createMedia,setMediaStatus} from '../core/media-admin';
 import {COMMISSION_TIERS_BPS} from '../core/pricing';
 import {handleUpload,type HandleUploadBody} from '@vercel/blob/client';
@@ -312,6 +312,10 @@ async function route(request:Request,path:string){
   }));
  }
 
+ if(path==='manufacturer/adopt-inventory'){
+  authorize(actor,'operate');const input=z.object({stationId:id}).strict().parse(body);
+  return reply(await write('operate',(d,current)=>{rateLimit(d,`manufacturer-adopt-${current.id}`,10);const target=d.stations.find(row=>row.id===input.stationId);if(!target)throw new DomainError('Station introuvable.',404);assertTenant(current,target.partnerId);const result=adoptProviderInventory(d,target.id);audit(d,current,`Inventaire aligné sur la borne réelle · ${target.publicId} (${result.batteries} batterie(s), ${result.slots} slot(s))`);return result;}));
+ }
  if(path==='manufacturer/link'){
   authorize(actor,'operate');const input=z.object({stationId:id,manufacturer:z.literal('BAJIE'),externalId:z.string().trim().min(1).max(150)}).strict().parse(body);
   return reply(await write('operate',(d,current)=>{rateLimit(d,`manufacturer-link-${current.id}`,30);const target=d.stations.find(row=>row.id===input.stationId);if(!target)throw new DomainError('Station introuvable.',404);assertTenant(current,target.partnerId);const link=linkManufacturerStation(d,target.id,input.manufacturer,input.externalId);audit(d,current,`Association fabricant ${input.manufacturer} · ${target.publicId}`);return {link};}));
