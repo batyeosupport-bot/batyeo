@@ -17,7 +17,7 @@ export const PAYMENT_STATES = ['PENDING','AUTHORIZING','AUTHORIZED','CAPTURING',
 export type PaymentState = typeof PAYMENT_STATES[number];
 export const PHYSICAL_STATES = ['IDLE','EJECTING','EJECTED','RETURN_PENDING','RETURNED','FAILED','UNKNOWN'] as const;
 export type PhysicalState = typeof PHYSICAL_STATES[number];
-export interface Rental { id:string; customerId:string; partnerId:string; stationId:string; batteryId:string|null; returnStationId:string|null; state:RentalState; paymentState?:PaymentState; physicalState?:PhysicalState; createdAt:number; startedAt:number|null; returnedAt:number|null; deadline:number|null; pricing:PricingStrategy; amountCents:number; commissionCents:number; idempotencyKey:string; error:string|null; simulatedMinutes:number; }
+export interface Rental { id:string; customerId:string; partnerId:string; stationId:string; batteryId:string|null; returnStationId:string|null; state:RentalState; paymentState?:PaymentState; physicalState?:PhysicalState; createdAt:number; startedAt:number|null; returnedAt:number|null; deadline:number|null; pricing:PricingStrategy; amountCents:number; commissionCents:number; idempotencyKey:string; contactEmail?:string|null; error:string|null; simulatedMinutes:number; }
 export interface RentalEvent { id:string; rentalId:string; at:number; type:string; detail:string; }
 export type PaymentProviderName = 'mock'|'stripe';
 export interface Payment { id:string; rentalId:string; authorizedCents:number; capturedCents:number; releasedCents:number; refundedCents?:number; disputedAt?:number|null; status:PaymentState; provider?:PaymentProviderName; providerReference?:string|null; error?:string|null; requestedCents?:number; }

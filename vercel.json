@@ -1,4 +1,10 @@
 {
   "buildCommand": "pnpm prisma generate && pnpm run build:postgres",
-  "installCommand": "pnpm install --frozen-lockfile"
+  "installCommand": "pnpm install --frozen-lockfile",
+  "crons": [
+    {
+      "path": "/api/core/internal/cron",
+      "schedule": "0 3 * * *"
+    }
+  ]
 }

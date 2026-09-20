@@ -28,8 +28,8 @@ export class StripeRentalCoordinator {
  private readonly engine:RentalEngine;
  constructor(private readonly payment:Pick<StripePaymentProvider,'authorize'|'capture'|'release'|'refund'>,private readonly station:BatteryStationProvider=new MockBatteryStationProvider(),private readonly ejector?:AsyncBatteryEjector){this.engine=new RentalEngine(undefined,station);}
 
- async start(repository:Repository,customerId:string,stationId:string,key:string,now=Date.now()):Promise<Rental>{
-  const created=await repository.transaction(d=>this.engine.create(d,customerId,stationId,key,now));
+ async start(repository:Repository,customerId:string,stationId:string,key:string,now=Date.now(),contactEmail?:string):Promise<Rental>{
+  const created=await repository.transaction(d=>this.engine.create(d,customerId,stationId,key,now,contactEmail));
   if(created.state!=='CREATED')return created;
   let intent:StripeIntent;
   try {intent=await this.payment.authorize(created.id,created.pricing.depositCents);}

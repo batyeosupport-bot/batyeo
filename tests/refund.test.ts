@@ -13,9 +13,6 @@ import type {Data} from '../core/types';
 class MemoryRepository implements Repository {constructor(public data:Data){}async read(){return structuredClone(this.data);}async transaction<T>(fn:(d:Data)=>T){const next=structuredClone(this.data),value=fn(next);validateData(next);this.data=next;return value;}}
 const origin='https://batyeo.test';
 const completed=()=>{const d=seedData('x');const engine=new RentalEngine();const r=engine.start(d,'cust-refund','station-paris','k-refund',1_000);engine.return(d,r.id,'station-paris',2_000);return {d,rentalId:r.id};};
-function call(repo:Repository,path:string,body:unknown,token:string){
- return createApi(repo,{demo:true,allowLegacyCredentials:true},{}).POST(new Request(origin+'/api/core/'+path,{method:'POST',headers:{origin,'content-type':'application/json',cookie:`batyeo_session=${token}`},body:JSON.stringify(body)}),{params:Promise.resolve({path:path.split('/')})});
-}
 async function session(repo:MemoryRepository,userId:string){const token=crypto.randomUUID()+crypto.randomUUID();repo.data.sessions.push({id:await sha256(token),userId,expiresAt:Date.now()+100_000,authVersion:0});return token;}
 
 test('a refund is bounded by what was actually captured, cumulative, and leaves the partner commission frozen',()=>{
@@ -87,4 +84,18 @@ test('a bank dispute and a dashboard refund are picked up from Stripe even thoug
  assert.deepEqual(applyStripeWebhook(d,{id:'evt_3',type:'charge.refunded',data:{object:{id:'ch_1',payment_intent:'pi_test_3',amount_refunded:payment.capturedCents*5}}}),{refunded:true});
  assert.equal(payment.refundedCents,payment.capturedCents,'never more than what was captured, whatever Stripe reports');
  validateData(d);
+});
+
+test('the contact email is optional, normalised, and never handed to a partner',async()=>{
+ const d=seedData('x');const engine=new RentalEngine();
+ const withEmail=engine.start(d,'c1','station-paris','k1',1_000,'  Client@Exemple.FR ');
+ const without=engine.start(d,'c2','station-paris','k2',1_000);
+ assert.equal(withEmail.contactEmail,'client@exemple.fr','stored the way login looks addresses up');
+ assert.equal(without.contactEmail,null,'refusing to give one never blocks a rental');
+ validateData(d);
+ const {dashboard}=await import('../core/queries');
+ const staffView=dashboard(d,{id:'admin-demo',role:'SUPER_ADMIN',partnerId:null}).rentals.find(r=>r.id===withEmail.id)!;
+ assert.equal(staffView.contactEmail,'client@exemple.fr');
+ const partnerView=dashboard(d,{id:'partner-demo',role:'PARTNER_ADMIN',partnerId:'partner-a'}).rentals.find(r=>r.id===withEmail.id)!;
+ assert.equal(partnerView.contactEmail,undefined,'a venue owner never sees who rented');
 });

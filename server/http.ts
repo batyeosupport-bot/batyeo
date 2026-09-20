@@ -51,6 +51,24 @@ export function createApi(repository:Repository,options:{demo:boolean;allowLegac
  } catch(e) { startupError=e; }
 async function route(request:Request,path:string){
  if(startupError)throw startupError;
+ // Vercel Cron issues a plain GET and, when CRON_SECRET is set on the project, attaches it as a
+ // bearer token itself. One entry point running both jobs keeps a Hobby plan (a single daily cron)
+ // enough to stay safe: without any scheduler, an unreturned battery is never billed and a return
+ // is only ever noticed when the manufacturer webhook fires or an admin syncs by hand.
+ if(request.method==='GET'&&path==='internal/cron'){
+  const expected=typeof process!=='undefined'?process.env.CRON_SECRET:undefined,provided=request.headers.get('authorization')?.replace(/^Bearer /,'');
+  if(!expected||!provided||(await sha256(expected))!==(await sha256(provided)))throw new DomainError('Tâche planifiée non autorisée.',401);
+  const now=Date.now();
+  const sync=manufacturerSync?await manufacturerSync.run({trigger:'SCHEDULED'}):null;
+  await repository.transaction(d=>engine.refreshOverdue(d,now));
+  const candidates=(await repository.read()).rentals.filter(r=>overdueLossEligible(r,now));
+  const losses:{rentalId:string;status:'captured'|'failed'}[]=[];
+  for(const candidate of candidates){
+   try{if(stripeCoordinator)await stripeCoordinator.captureOverdueLoss(repository,candidate.id,now);else await repository.transaction(d=>engine.markDepositLost(d,candidate.id,candidate.pricing.depositCents,undefined,now));losses.push({rentalId:candidate.id,status:'captured'});}
+   catch{losses.push({rentalId:candidate.id,status:'failed'});}
+  }
+  return reply({sync:sync?sync.status:'not_configured',overdue:losses.length,losses});
+ }
  if(request.method==='POST'&&path==='internal/manufacturer/sync'){
   const expected=typeof process!=='undefined'?process.env.MANUFACTURER_SYNC_SECRET:undefined,provided=request.headers.get('authorization')?.replace(/^Bearer /,'');if(!expected||!provided||(await sha256(expected))!==(await sha256(provided)))throw new DomainError('Job de synchronisation non autorisé.',401);if(!manufacturerSync)throw new DomainError('Provider fabricant non configuré.',503);return reply({run:await manufacturerSync.run({trigger:'SCHEDULED'})});
  }
@@ -162,7 +180,7 @@ async function route(request:Request,path:string){
   if(path==='stripe/terminal-locations'){authorize(actor,'settings');if(paymentMode!=='stripe_test')throw new DomainError('Stripe TEST n’est pas configuré sur ce serveur.',503);return reply({locations:await listTerminalLocations(process.env.STRIPE_SECRET_KEY!)});}
   if(path.startsWith('manufacturer/stations/')){authorize(actor,'read');if(!manufacturerProvider)throw new DomainError('Provider fabricant non configuré.',503);const local=d.stations.find(s=>s.id===path.split('/')[2]||s.publicId===path.split('/')[2]);if(!local)throw new DomainError('Station introuvable.',404);assertTenant(actor!,local.partnerId);const link=d.stationProviderLinks.find(row=>row.stationId===local.id&&row.active),externalId=link?.externalId??local.providerDeviceId;if(!externalId)throw new DomainError('Identifiant fabricant non configuré pour cette station.',409);const snapshot=await manufacturerProvider.getDeviceInfo(externalId);return reply({station:snapshot,differences:reconcileManufacturerStation(d,local,snapshot)});}
   if(path.startsWith('rentals/')){
-   authorize(actor,'read');const r=d.rentals.find(r=>r.id===path.split('/')[1]);if(!r)throw new DomainError('Location introuvable.',404);assertTenant(actor!,r.partnerId);return reply(rentalView(d,r,canViewFinance(actor!)));
+   authorize(actor,'read');const r=d.rentals.find(r=>r.id===path.split('/')[1]);if(!r)throw new DomainError('Location introuvable.',404);assertTenant(actor!,r.partnerId);return reply(rentalView(d,r,canViewFinance(actor!),!actor!.role.startsWith('PARTNER_')));
   }
   throw new DomainError('Ressource introuvable.',404);
  }
@@ -209,11 +227,11 @@ async function route(request:Request,path:string){
  }
  if(path==='logout'){const token=cookie(request,'batyeo_session');const digest=token?await sha256(token):'';await repository.transaction(d=>{d.sessions=d.sessions.filter(s=>s.id!==digest);});return reply({ok:true},200,{'Set-Cookie':setCookie(request,'batyeo_session','',0)});}
  if(path==='start'){
-  const input=z.object({stationPublicId:id,termsAccepted:z.literal(true),idempotencyKey:z.string().uuid()}).strict().parse(body);
+  const input=z.object({stationPublicId:id,termsAccepted:z.literal(true),idempotencyKey:z.string().uuid(),contactEmail:z.string().trim().email().max(200).optional()}).strict().parse(body);
   const token=customerToken(request)??'';if(!token)throw new DomainError('Rechargez la page pour préparer votre session de location.',400);const digest=await sha256(token);
   let result;
-  if(stripeCoordinator){const customerId=await repository.transaction(d=>{const id=requireCustomer(d,digest);d.customerSessions.find(s=>s.id===digest)!.expiresAt=Date.now()+CUSTOMER_LIFETIME_MS;rateLimit(d,`start-${id}`,12);engine.refreshOverdue(d);return id;});result=await stripeCoordinator.start(repository,customerId,input.stationPublicId,input.idempotencyKey);}
-  else result=await repository.transaction(d=>{const customerId=requireCustomer(d,digest);d.customerSessions.find(s=>s.id===digest)!.expiresAt=Date.now()+CUSTOMER_LIFETIME_MS;rateLimit(d,`start-${customerId}`,12);engine.refreshOverdue(d);return engine.start(d,customerId,input.stationPublicId,input.idempotencyKey);});
+  if(stripeCoordinator){const customerId=await repository.transaction(d=>{const id=requireCustomer(d,digest);d.customerSessions.find(s=>s.id===digest)!.expiresAt=Date.now()+CUSTOMER_LIFETIME_MS;rateLimit(d,`start-${id}`,12);engine.refreshOverdue(d);return id;});result=await stripeCoordinator.start(repository,customerId,input.stationPublicId,input.idempotencyKey,Date.now(),input.contactEmail);}
+  else result=await repository.transaction(d=>{const customerId=requireCustomer(d,digest);d.customerSessions.find(s=>s.id===digest)!.expiresAt=Date.now()+CUSTOMER_LIFETIME_MS;rateLimit(d,`start-${customerId}`,12);engine.refreshOverdue(d);return engine.start(d,customerId,input.stationPublicId,input.idempotencyKey,Date.now(),input.contactEmail);});
   return reply({rental:customerRentalView(await repository.read(),result)},200,{'Set-Cookie':setCookie(request,'batyeo_customer',token,7*86400)});
  }
  if(path==='customer/session'){
