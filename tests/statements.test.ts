@@ -56,3 +56,15 @@ test('a partner only ever sees their own statement, and the CSV opens straight i
  assert.equal(first.split(';').length,8);
  assert.match(first,/\d+,\d{2}/,'comma decimals, as a French spreadsheet expects');
 });
+
+test('the dashboard and the public API report the deployment’s real payment mode instead of a hardcoded demo flag',async()=>{
+ const {dashboard}=await import('../core/queries');
+ const d=seedData('x');const actor={id:'admin-demo',role:'SUPER_ADMIN' as const,partnerId:null};
+ assert.deepEqual([dashboard(d,actor).demo,dashboard(d,actor).payment],[false,'mock'],'the safe default is a real deployment paying nothing, never a demo claim');
+ const live=dashboard(d,actor,{demo:false,payment:'stripe_live'});
+ assert.deepEqual([live.demo,live.payment],[false,'stripe_live']);
+ const repo=new MemoryRepository(d);
+ const res=await createApi(repo,{demo:true,allowLegacyCredentials:true},{}).GET(new Request(origin+'/api/core/public'),{params:Promise.resolve({path:['public']})});
+ const body=await res.json() as {demo:boolean;payment:string};
+ assert.deepEqual([body.demo,body.payment],[true,'mock'],'the rental page needs both to choose what it tells the customer');
+});
