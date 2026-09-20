@@ -1,5 +1,9 @@
 # Audit avant lancement — 2026-09-20
 
+> **Suite donnée le 2026-09-20** : tous les points ci-dessous ont été corrigés, sauf ceux
+> explicitement marqués « reste à faire » dans la section finale. Le document garde la description
+> d'origine du problème, qui explique *pourquoi* chaque correction existe.
+
 Revue complète du dépôt à la recherche d'incohérences, de bugs et de manques, en vue d'un usage
 avec de vrais clients. Chaque point a été vérifié dans le code, pas supposé. Classé par ce que
 ça coûte, pas par difficulté.
@@ -151,3 +155,57 @@ comme réel.
 4. **F**/**G** — collecter un email et l'utiliser : reçu, relance avant débit, mot de passe oublié.
 5. **E** — versement partenaire, avant le premier vrai partenaire payé.
 6. **4.** — retirer les mentions démo, en dernier, juste avant le passage en réel.
+
+
+---
+
+# Suite donnée — 2026-09-20
+
+## Corrigé
+
+- **Bug d'argent (retour bloqué)** — `RentalEngine.placeReturned` : quand la borne confirme le
+  retour, la comptabilité locale suit le matériel au lieu de le contredire.
+- **A. Borne hors ligne** — pour une station liée à une borne réelle, la synchronisation écrit
+  `station.online` d'après la lecture. Une réponse « device not online » (code 2004) vaut borne
+  hors ligne ; un simple timeout réseau ne touche à rien, pour ne pas couper les ventes sur un
+  incident passager.
+- **B. Disponibilité** — `cappedAvailability` : ni l'affichage public ni la porte de vente ne
+  peuvent annoncer plus de batteries qu'une lecture fraîche (< 15 min) de la borne. Sous-promettre
+  est le seul sens sûr.
+- **C. Batteries bloquées** — `setBatteryService` + bouton dans Batteries : retirer du service une
+  batterie abîmée, et remettre en service une batterie perdue puis rapportée (en indiquant la borne
+  où elle a été retrouvée). Jamais sur une batterie en cours de location.
+- **D. Remboursement et litiges** — `rental/refund` (rôles financiers BATYEO uniquement, jamais un
+  partenaire), Stripe appelé avant tout enregistrement local. `charge.dispute.created` et
+  `charge.refunded` sont rattachés au paiement par `payment_intent`, ce qui rattrape aussi un
+  remboursement fait depuis le tableau de bord Stripe. Une contestation lève une alerte CRITICAL.
+- **E. Versement partenaire** — `partnerStatements` + bouton « Relevé des commissions » : total dû
+  par partenaire sur une période, exporté en CSV lisible directement par un tableur français. Les
+  locations sont comptées à leur date de **retour**. Un remboursement baisse l'encaissé mais jamais
+  la commission, figée dans le snapshot tarifaire.
+- **F. Contact client** — champ email facultatif à la location, invisible des partenaires
+  (`rentalView(..., contact)`), affiché dans le détail de la location côté BATYEO.
+- **H. Tâche planifiée** — `GET internal/cron` protégé par `CRON_SECRET` (le secret que Vercel
+  attache lui-même), qui lance la synchronisation **et** la capture des cautions en retard.
+  Déclaré dans `vercel.json` à 3 h du matin, ce qui tient sur un plan gratuit.
+- **I. Journalisation** — une requête qui échoue journalise sa route, sa méthode et le type
+  d'erreur, sans rien exposer au client.
+- **Section 4 (mentions démo)** — tout ce qu'on dit au client sur son argent découle désormais du
+  mode de paiement réel. Le mode `stripe_live` existe et exige une clé `sk_live_` explicite.
+  Conditions de location et confidentialité réécrites pour le service réel ; la version acceptée
+  n'est plus `demo-…` mais `TERMS_VERSION` (`2026-09-v1` par défaut).
+
+## Reste à faire, et pourquoi je ne l'ai pas fait
+
+- **G. Envoi d'emails** — l'adresse est maintenant collectée et affichée, mais **rien n'est
+  envoyé** : cela demande un prestataire (Resend, Postmark, SES…), un domaine vérifié et une clé
+  API. Décision + identifiants côté utilisateur. Tant que ce n'est pas branché, la relance avant
+  débit de caution se fait à la main depuis le détail de la location.
+- **Validation juridique** — les deux pages légales décrivent fidèlement le service mais doivent
+  être complétées (identité de l'exploitant, médiateur de la consommation, rétractation) et
+  relues par un juriste avant tout encaissement réel.
+- **Secrets à créer dans Vercel** — `CRON_SECRET` (sinon la tâche planifiée répond 401).
+- **Migrations à appliquer** — `202609200001_refund_and_dispute` et `202609200002_customer_contact`
+  sur staging puis production.
+- **Le reste de la boucle physique** — inchangé : réponse du fournisseur, enregistrement du
+  webhook, puis ouverture du verrou. Voir `docs/EXTERNAL_BLOCKERS.md`.
