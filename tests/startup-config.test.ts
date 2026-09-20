@@ -30,7 +30,7 @@ test('a startup configuration error surfaces as the same clean {error,status} JS
  const response=await api.GET(request,{params:Promise.resolve({path:['health']})});
  assert.equal(response.status,503);
  const body=await response.json() as {error:string};
- assert.equal(body.error,'Stripe TEST nécessite STRIPE_SECRET_KEY.');
+ assert.equal(body.error,'Stripe TEST nécessite une clé STRIPE_SECRET_KEY commençant par sk_test_.');
 }));
 test('the same startup error is consistent across every route, not just the one first hit',()=>withEnv({PAYMENT_PROVIDER:'stripe_test',STRIPE_SECRET_KEY:''},async()=>{
  const api=createApi(new MemoryRepository(seedData('unused')),{demo:true,allowLegacyCredentials:true});

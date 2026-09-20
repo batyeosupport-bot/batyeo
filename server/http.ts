@@ -141,8 +141,8 @@ async function route(request:Request,path:string){
  }
  if(request.method==='GET'){
   const d=await repository.read();const actor=await actorFor(request,d);
-  if(path==='health')return reply({status:'ok',demo:options.demo,providers:{payment:paymentMode,station:'mock',manufacturer:manufacturerProvider?'read_only':'not_configured'},manufacturerHealth:providerHealth(d),serverTime:Date.now()});
-  if(path==='public')return reply({stations:stationViews(d).filter(s=>!s.archivedAt),pricing:d.pricing[0],demo:options.demo});
+  if(path==='health')return reply({status:'ok',demo:options.demo,providers:{payment:paymentMode,station:batteryEjector?'manufacturer':'mock',manufacturer:manufacturerProvider?'read_only':'not_configured'},manufacturerHealth:providerHealth(d),serverTime:Date.now()});
+  if(path==='public')return reply({stations:stationViews(d).filter(s=>!s.archivedAt),pricing:d.pricing[0],demo:options.demo,payment:paymentMode});
   if(path.startsWith('translations/')){
    const config=displayConfigFor(d,path.split('/')[1]);
    return reply({locale:config.locale,translations:config.translations});
@@ -173,7 +173,7 @@ async function route(request:Request,path:string){
    const token=customerToken(request);if(!token)throw new DomainError('Session client manquante.',401);const customerId=requireCustomer(d,await sha256(token));return reply({rentals:d.rentals.filter(r=>r.customerId===customerId).sort((a,b)=>b.createdAt-a.createdAt).map(r=>customerRentalView(d,r)),serverTime:Date.now()});
   }
   if(path==='system/status'){authorize(actor,'read');if(actor!.role.startsWith('PARTNER_'))throw new DomainError('Accès non autorisé.',403);return reply({payment:paymentMode,manufacturer:manufacturerProvider?'read_only':'not_configured',physicalActions:physicalActionsAllowed,manufacturerHealth:providerHealth(d),serverTime:Date.now()});}
-  if(path==='dashboard'){authorize(actor,'read');if(d.rentals.some(r=>r.state==='ACTIVE'&&r.deadline!==null&&Date.now()+r.simulatedMinutes*60000>r.deadline)){await repository.transaction(next=>engine.refreshOverdue(next));return reply(dashboard(await repository.read(),actor!));}return reply(dashboard(d,actor!));}
+  if(path==='dashboard'){authorize(actor,'read');if(d.rentals.some(r=>r.state==='ACTIVE'&&r.deadline!==null&&Date.now()+r.simulatedMinutes*60000>r.deadline)){await repository.transaction(next=>engine.refreshOverdue(next));return reply(dashboard(await repository.read(),actor!,{demo:options.demo,payment:paymentMode}));}return reply(dashboard(d,actor!,{demo:options.demo,payment:paymentMode}));}
   if(path==='manufacturer/stations'){authorize(actor,'operate');if(!manufacturerProvider)throw new DomainError('Provider fabricant non configuré.',503);const search=new URL(request.url).searchParams;const query=z.object({coordType:z.string().min(1).max(30),zoomLevel:z.coerce.number().int(),lat:z.coerce.number().finite(),lng:z.coerce.number().finite(),showPrice:z.enum(['true','false']).transform(value=>value==='true')}).parse(Object.fromEntries(search));return reply({stations:await manufacturerProvider.listDevices(query)});}
   // Read of the merchant's own Stripe account, so an operator can reuse a Location it already has
   // — including one created earlier from the manufacturer's platform — instead of duplicating it.

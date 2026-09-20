@@ -181,6 +181,6 @@ export function validateManufacturerStartup(env:Record<string,string|undefined>)
  // inside the transaction through MockBatteryStationProvider — with a station linked to real
  // hardware it would mark a rental ACTIVE on a battery that never physically left. Fail closed
  // on that combination at startup instead of discovering it on a customer's first rental.
- if(config?.allowPhysicalActions&&resolvePaymentMode(env)!=='stripe_test')throw new ManufacturerError('Les éjections physiques réelles exigent PAYMENT_PROVIDER=stripe_test : le mode mock éjecte de façon synchrone et ne pilote aucune borne réelle.',503,'PHYSICAL_BLOCKED');
+ if(config?.allowPhysicalActions&&resolvePaymentMode(env)==='mock')throw new ManufacturerError('Les éjections physiques réelles exigent un mode de paiement Stripe : le mode mock éjecte de façon synchrone dans la transaction et ne pilote aucune borne réelle.',503,'PHYSICAL_BLOCKED');
  return config;
 }

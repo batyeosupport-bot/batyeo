@@ -5,8 +5,10 @@ export interface StripeRequest {method:'POST';path:string;body:Record<string,unk
 export type StripeTransport=(request:StripeRequest)=>Promise<StripeIntent>;
 
 /** Stripe TEST boundary. The transport is injected so tests never contact Stripe. */
+/** Accepts both Stripe environments; which one is allowed is decided once, by resolvePaymentMode. */
+const stripeKey=(key:string)=>!!key&&(key.startsWith('sk_test_')||key.startsWith('sk_live_'));
 export class StripePaymentProvider {
- constructor(private readonly secretKey:string,private readonly transport:StripeTransport=(request)=>defaultTransport(secretKey,request)){if(!secretKey||!secretKey.startsWith('sk_test_'))throw new DomainError('Stripe TEST nécessite une clé sk_test_.',503);}
+ constructor(private readonly secretKey:string,private readonly transport:StripeTransport=(request)=>defaultTransport(secretKey,request)){if(!stripeKey(secretKey))throw new DomainError('Clé Stripe absente ou invalide (sk_test_… ou sk_live_…).',503);}
  async authorize(rentalId:string,cents:number):Promise<StripeIntent>{if(!Number.isSafeInteger(cents)||cents<=0)throw new DomainError('Montant d’autorisation invalide.');return this.call('/payment_intents',{amount:cents,currency:'eur',capture_method:'manual',metadata:{rentalId,provider:'batyeo'}},`rental-${rentalId}-authorize`);}
  async capture(intentId:string,cents:number,rentalId:string):Promise<StripeIntent>{if(!Number.isSafeInteger(cents)||cents<0)throw new DomainError('Montant de capture invalide.');return this.call(`/payment_intents/${encodeURIComponent(intentId)}/capture`,{amount_to_capture:cents,metadata:{rentalId}},`rental-${rentalId}-capture-${cents}`);}
  /** Giving money back is the only correction available once a deposit is captured: a capture
@@ -25,7 +27,7 @@ async function defaultTransport(secretKey:string,request:StripeRequest):Promise<
  * is the only Stripe call the kiosk's own process is allowed to trigger.
  */
 export async function createTerminalConnectionToken(secretKey:string):Promise<{secret:string}>{
- if(!secretKey||!secretKey.startsWith('sk_test_'))throw new DomainError('Stripe TEST nécessite une clé sk_test_.',503);
+ if(!stripeKey(secretKey))throw new DomainError('Clé Stripe absente ou invalide (sk_test_… ou sk_live_…).',503);
  const response=await fetch('https://api.stripe.com/v1/terminal/connection_tokens',{method:'POST',headers:{Authorization:`Bearer ${secretKey}`,'Content-Type':'application/x-www-form-urlencoded'}});
  const payload=await response.json() as {secret?:string;error?:{message?:string}};
  if(!response.ok||!payload.secret)throw new DomainError(payload.error?.message??'Stripe a refusé la demande de jeton lecteur.',response.status===402?402:503);
@@ -35,7 +37,7 @@ export interface TerminalLocation {id:string;displayName:string;line1:string;cit
 interface StripeLocationPayload {id?:string;display_name?:string;address?:{line1?:string;city?:string;postal_code?:string;country?:string;state?:string};}
 const mapTerminalLocation=(row:StripeLocationPayload):TerminalLocation=>({id:row.id??'',displayName:row.display_name??'',line1:row.address?.line1??'',city:row.address?.city??'',postalCode:row.address?.postal_code??'',country:row.address?.country??'',state:row.address?.state??''});
 async function terminalRequest(secretKey:string,method:'GET'|'POST',path:string,body?:URLSearchParams):Promise<unknown>{
- if(!secretKey||!secretKey.startsWith('sk_test_'))throw new DomainError('Stripe TEST nécessite une clé sk_test_.',503);
+ if(!stripeKey(secretKey))throw new DomainError('Clé Stripe absente ou invalide (sk_test_… ou sk_live_…).',503);
  const response=await fetch(`https://api.stripe.com/v1${path}`,{method,headers:{Authorization:`Bearer ${secretKey}`,...(body?{'Content-Type':'application/x-www-form-urlencoded'}:{})},body});
  const payload=await response.json() as {error?:{message?:string}};
  if(!response.ok)throw new DomainError(payload.error?.message??'Stripe a refusé l’opération Terminal.',response.status===402?402:503);
