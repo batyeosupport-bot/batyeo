@@ -66,3 +66,28 @@ test('a failing close handler never marks the station sync as failed and leaves 
  const run=await service.run({trigger:'SCHEDULED'});
  assert.equal(run.status,'COMPLETED');assert.equal(repo.data.rentals.find(r=>r.id===rental.id)!.state,'ACTIVE');assert.ok(logs.includes('manufacturer_return_close_failed'));
 });
+
+test('a return confirmed by the cabinet closes the rental even when local bookkeeping disagrees — a stranded rental would bill the full deposit at 48 h',()=>{
+ for(const [label,sabotage] of [
+  ['station marquée hors ligne localement',(d:Data)=>{d.stations.find(s=>s.id==='station-lyon')!.online=false;}],
+  ['aucun slot libre côté BATYEO',(d:Data)=>{let n=0;for(const slot of d.slots.filter(s=>s.stationId==='station-lyon'&&!s.batteryId)){const id=`FILL-${++n}`;d.batteries.push({id,charge:100,status:'AVAILABLE'});slot.batteryId=id;}}],
+ ] as [string,(d:Data)=>void][]){
+  const d=seedData('x'),engine=new RentalEngine();
+  const rental=engine.start(d,'cust-drift','station-paris','k-drift',1_000);
+  assert.equal(rental.state,'ACTIVE',label);
+  sabotage(d);
+  const closed=engine.return(d,rental.id,'station-lyon',2_000,true);
+  assert.equal(closed.state,'COMPLETED',label);
+  assert.equal(d.batteries.find(b=>b.id===rental.batteryId)!.status,'AVAILABLE',label);
+  assert.equal(d.slots.filter(s=>s.batteryId===rental.batteryId).length,1,`${label} — exactement un slot, jamais deux`);
+  validateData(d);
+ }
+});
+
+test('a cabinet-confirmed return puts the battery back at the station that physically holds it',()=>{
+ const d=seedData('x'),engine=new RentalEngine();
+ const rental=engine.start(d,'cust-cross','station-paris','k-cross',1_000);
+ engine.return(d,rental.id,'station-lyon',2_000,true);
+ assert.equal(d.slots.find(s=>s.batteryId===rental.batteryId)!.stationId,'station-lyon');
+ validateData(d);
+});
