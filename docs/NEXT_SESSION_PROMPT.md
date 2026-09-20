@@ -84,6 +84,8 @@ Route `system/status` : mode de paiement, fournisseur de la borne, verrou d'éje
 
 ---
 
+> **Audit complet du 2026-09-20 : `docs/AUDIT.md`** — incohérences vérifiées dans le code (borne hors ligne invisible, disponibilité locale, batterie perdue irrécupérable, aucun remboursement, aucun versement partenaire), manques (email, client identifié par un simple cookie, tâches planifiées, surveillance) et inventaire des mentions « démo » à retirer. Un bug d'argent y a été trouvé et corrigé. À lire avant de planifier la suite.
+
 ## Bilan de complétude (2026-09-19) — le projet n'est PAS fini pour de vrais clients
 
 Ce qui est solide : le cœur métier, l'admin/partenaire, les comptes, l'affichage, le parcours web, la démo de bout en bout (274 tests, `test:sql`, `test:integration`, build, smoke test navigateur).
