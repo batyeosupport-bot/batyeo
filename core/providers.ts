@@ -30,6 +30,16 @@ export class MockPaymentProvider implements PaymentProvider {
   p.releasedCents=p.authorizedCents;p.status='RELEASED';return p;
  }
 }
+/** How long a cabinet read stays trustworthy for gating sales. Mirrors providerHealth's own window. */
+export const PROVIDER_SNAPSHOT_FRESH_MS=15*60_000;
+/** Local bookkeeping may never promise more batteries than the cabinet itself reported: between two
+ * reads a battery can leave through the manufacturer's own rental flow or a manual eject, and a
+ * station showing more than the cabinet holds sells a rental it cannot serve. Under-promising is
+ * the safe direction, so this only ever lowers the count. */
+export function cappedAvailability(d:Data,stationId:string,local:number,now=Date.now()):number{
+ const snapshot=d.stationProviderSnapshots.find(row=>row.stationId===stationId);
+ return snapshot&&snapshot.syncedAt>=now-PROVIDER_SNAPSHOT_FRESH_MS?Math.min(local,snapshot.availability):local;
+}
 export interface BatteryStationProvider {
  getStation(data:Data,id:string):Station;
  getAvailability(data:Data,id:string):number;
@@ -40,7 +50,7 @@ export interface BatteryStationProvider {
 }
 export class MockBatteryStationProvider implements BatteryStationProvider {
  getStation(d:Data,id:string) {const s=d.stations.find(s=>s.id===id||s.publicId===id);if(!s)throw new DomainError('Station introuvable.',404);return s;}
- getAvailability(d:Data,id:string) {const s=this.getStation(d,id);return d.slots.filter(slot=>slot.stationId===s.id&&d.batteries.some(b=>b.id===slot.batteryId&&b.status==='AVAILABLE')).length;}
+ getAvailability(d:Data,id:string) {const s=this.getStation(d,id);return cappedAvailability(d,s.id,d.slots.filter(slot=>slot.stationId===s.id&&d.batteries.some(b=>b.id===slot.batteryId&&b.status==='AVAILABLE')).length);}
  ejectBattery(d:Data,id:string) {
   const s=this.getStation(d,id);
   if(!s.online)throw new DomainError('Cette station est hors ligne. Aucune somme débitée.');

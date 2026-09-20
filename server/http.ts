@@ -17,7 +17,7 @@ import {checksumConfig} from '../core/runtime-config';
 import {heartbeatHealth} from '../core/heartbeat';
 import {validateTranslations} from '../core/i18n';
 import type {Actor,Data,StationHeartbeatRecord} from '../core/types';
-import {createStation,createVenue,updateVenue,publicQrUrl,setStripeTerminalLocation,blockStationRentals,unblockStationRentals,archiveStation,restoreStation,relocateStation,setPartnerCommission,createPartner,adoptProviderInventory} from '../core/station-admin';
+import {createStation,createVenue,updateVenue,publicQrUrl,setStripeTerminalLocation,blockStationRentals,unblockStationRentals,archiveStation,restoreStation,relocateStation,setPartnerCommission,createPartner,adoptProviderInventory,setBatteryService} from '../core/station-admin';
 import {createMedia,setMediaStatus} from '../core/media-admin';
 import {COMMISSION_TIERS_BPS} from '../core/pricing';
 import {handleUpload,type HandleUploadBody} from '@vercel/blob/client';
@@ -312,6 +312,11 @@ async function route(request:Request,path:string){
   }));
  }
 
+ if(path==='battery/service'){
+  authorize(actor,'operate');
+  const input=z.object({batteryId:id,action:z.enum(['MAINTENANCE','AVAILABLE']),stationId:id.optional()}).strict().parse(body);
+  return reply(await write('operate',(d,current)=>{const battery=setBatteryService(d,input.batteryId,input.action,input.stationId);audit(d,current,`Batterie ${input.action==='MAINTENANCE'?'retirée du service':'remise en service'} · ${battery.id}`);return {battery};}));
+ }
  if(path==='manufacturer/adopt-inventory'){
   authorize(actor,'operate');const input=z.object({stationId:id}).strict().parse(body);
   return reply(await write('operate',(d,current)=>{rateLimit(d,`manufacturer-adopt-${current.id}`,10);const target=d.stations.find(row=>row.id===input.stationId);if(!target)throw new DomainError('Station introuvable.',404);assertTenant(current,target.partnerId);const result=adoptProviderInventory(d,target.id);audit(d,current,`Inventaire aligné sur la borne réelle · ${target.publicId} (${result.batteries} batterie(s), ${result.slots} slot(s))`);return result;}));

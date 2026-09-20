@@ -3,12 +3,12 @@ import {teamFor} from './accounts';
 import {authorize,inTenant} from './rental';
 import {calculatePrice} from './pricing';
 import {providerHealth} from './manufacturer-sync';
-import {DomainError} from './providers';
+import {cappedAvailability,DomainError} from './providers';
 import type {StationDisplayConfig,StationPublicSnapshot} from './station-runtime';
 import {activePlaylist} from './media';
 import {heartbeatHealth} from './heartbeat';
 import {evaluateAlerts} from './ops-alerts';
-export function stationViews(d:Data){return d.stations.map(s=>({...s,venue:d.venues.find(v=>v.id===s.venueId)!,available:d.slots.filter(slot=>slot.stationId===s.id&&d.batteries.some(b=>b.id===slot.batteryId&&b.status==='AVAILABLE')).length,freeSlots:d.slots.filter(slot=>slot.stationId===s.id&&!slot.batteryId).length}));}
+export function stationViews(d:Data,now=Date.now()){return d.stations.map(s=>({...s,venue:d.venues.find(v=>v.id===s.venueId)!,available:cappedAvailability(d,s.id,d.slots.filter(slot=>slot.stationId===s.id&&d.batteries.some(b=>b.id===slot.batteryId&&b.status==='AVAILABLE')).length,now),freeSlots:d.slots.filter(slot=>slot.stationId===s.id&&!slot.batteryId).length}));}
 /** Plain Error() here used to reach handle()'s generic 503 instead of a clean 404 — harmless while every caller already validated the station, but reachable the moment an unvalidated customer-supplied id (e.g. a stale QR code) reaches it. */
 export function stationDisplaySnapshot(d:Data,stationId:string):StationPublicSnapshot {const station=stationViews(d).find(row=>row.id===stationId||row.publicId===stationId);if(!station)throw new DomainError('Station introuvable.',404);const pricing=d.pricing[0];if(!pricing)throw new DomainError('Tarification indisponible.',503);return {stationId:station.id,publicId:station.publicId,venueName:station.venue.name,online:station.online,availableBatteries:station.available,capacity:station.capacity,hourlyCents:pricing.hourlyCents,capCents:pricing.capCents,depositCents:pricing.depositCents,qrTarget:`/rent/${station.publicId}`,providerHealth:providerHealth(d).status};}
 /**

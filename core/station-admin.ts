@@ -1,4 +1,4 @@
-import type {Data,Partner,Station,User,Venue} from './types';
+import type {Battery,Data,Partner,Station,User,Venue} from './types';
 import {DomainError} from './providers';
 import {OPEN_STATES} from './rental';
 export interface CreatePartnerInput {name:string;city:string;adminEmail:string;adminName:string;}
@@ -165,4 +165,25 @@ export function adoptProviderInventory(d:Data,stationId:string,now=Date.now()):{
   if(provided)d.batteries.push({id:provided,charge:100,status:'AVAILABLE'});
  }
  return {batteries:incoming.length,slots:snapshot.totalSlots};
+}
+
+/**
+ * Puts a battery back into — or out of — service. Without this, MAINTENANCE and the recovery of a
+ * LOST battery are only reachable from the demo simulator, which production refuses: a battery
+ * whose deposit was captured at the 48 h mark and that the customer then brings back stays LOST
+ * for ever, and a physically damaged battery cannot be pulled from rotation. Never touches a
+ * battery a customer is still holding. A LOST battery sits in no slot (the invariant forbids it),
+ * so putting it back in service needs the station where it was found.
+ */
+export function setBatteryService(d:Data,batteryId:string,action:'MAINTENANCE'|'AVAILABLE',stationId?:string):Battery {
+ const battery=d.batteries.find(b=>b.id===batteryId);if(!battery)throw new DomainError('Batterie introuvable.',404);
+ if(battery.status==='RENTED')throw new DomainError('Cette batterie est en location : attendez son retour.',409);
+ if(action==='MAINTENANCE'){
+  if(battery.status==='LOST')throw new DomainError('Cette batterie est enregistrée comme perdue : remettez-la d’abord en service.',409);
+  battery.status='MAINTENANCE';return battery;
+ }
+ if(battery.status!=='LOST'){battery.status='AVAILABLE';return battery;}
+ const station=d.stations.find(s=>s.id===stationId);if(!station)throw new DomainError('Indiquez la station où la batterie a été retrouvée.',400);
+ const slot=d.slots.find(s=>s.stationId===station.id&&!s.batteryId);if(!slot)throw new DomainError('Aucun emplacement libre dans cette station.',409);
+ slot.batteryId=battery.id;battery.status='AVAILABLE';return battery;
 }

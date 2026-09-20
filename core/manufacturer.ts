@@ -1,7 +1,7 @@
 import {z} from 'zod';
 import type {Data,Station} from './types';
 import type {BatteryStationProvider} from './providers';
-import {DomainError,PhysicalResultUnknownError} from './providers';
+import {cappedAvailability,DomainError,PhysicalResultUnknownError} from './providers';
 import {resolvePaymentMode} from './payment-mode';
 import type {Repository} from './repository';
 
@@ -15,6 +15,10 @@ export const MANUFACTURER_OPERATION_TYPES=['restart','pop','popall','popallForNo
 export type ManufacturerOperationType=typeof MANUFACTURER_OPERATION_TYPES[number];
 
 export class ManufacturerError extends DomainError {constructor(message:string,status=502,public readonly kind:'AUTH'|'TIMEOUT'|'UNAVAILABLE'|'MALFORMED'|'API'|'PHYSICAL_BLOCKED'='UNAVAILABLE'){super(message,status);}}
+/** Provider codes that mean the cabinet itself is unreachable rather than the request being wrong:
+ * the cabinet answers `{code:2004,msg:'Device not online.'}` with no `data` at all when it is
+ * unplugged. Treated as a confirmed offline cabinet, never as a transport failure. */
+export const MANUFACTURER_OFFLINE_CODES=[2004];
 export class ManufacturerApiError extends ManufacturerError {constructor(public readonly providerCode:number,message:string){super(message,502,'API');}}
 export interface ManufacturerLog {level:'info'|'warn'|'error';event:string;path:string;status?:number;providerCode?:number;}
 export type ManufacturerLogger=(entry:ManufacturerLog)=>void;
@@ -101,7 +105,7 @@ function mapDevice(deviceId:string,data:z.infer<typeof deviceResponseSchema>['da
 export class ManufacturerBatteryStationProvider implements BatteryStationProvider {
  constructor(private readonly client:ManufacturerHttpClient){}
  getStation(d:Data,id:string){const station=d.stations.find(s=>s.id===id||s.publicId===id||s.providerDeviceId===id);if(!station)throw new DomainError('Station introuvable.',404);return station;}
- getAvailability(d:Data,id:string){const station=this.getStation(d,id);return d.slots.filter(slot=>slot.stationId===station.id&&d.batteries.some(b=>b.id===slot.batteryId&&b.status==='AVAILABLE')).length;}
+ getAvailability(d:Data,id:string){const station=this.getStation(d,id);return cappedAvailability(d,station.id,d.slots.filter(slot=>slot.stationId===station.id&&d.batteries.some(b=>b.id===slot.batteryId&&b.status==='AVAILABLE')).length);}
  getDeviceInfo(deviceId:string){return this.client.getDeviceInfo({deviceId});}
  listDevices(query:ManufacturerListQuery){return this.client.listDevices(query);}
  ejectBattery(...args:Parameters<BatteryStationProvider['ejectBattery']>):string{void args;throw this.physicalBlocked();}

@@ -5,6 +5,10 @@ import {seedData} from '../core/seed';
 import {validateData} from '../core/invariants';
 import {adoptProviderInventory,INVENTORY_SNAPSHOT_MAX_AGE_MS} from '../core/station-admin';
 import {linkManufacturerStation,ManufacturerSyncService} from '../core/manufacturer-sync';
+import {setBatteryService} from '../core/station-admin';
+import {stationViews} from '../core/queries';
+import {MockBatteryStationProvider,PROVIDER_SNAPSHOT_FRESH_MS} from '../core/providers';
+import {ManufacturerApiError,ManufacturerError} from '../core/manufacturer';
 import {RentalEngine} from '../core/rental';
 import type {ManufacturerDeviceSnapshot} from '../core/manufacturer';
 import type {Repository} from '../core/repository';
@@ -53,4 +57,62 @@ test('adoptProviderInventory refuses every unsafe case and changes nothing',asyn
  drepo.data.rentals=drepo.data.rentals.filter(r=>r.stationId!=='station-paris'||r.state==='COMPLETED');drepo.data.rentals.push({...history,id:'history-of-slotted-battery',batteryId:'BAT-PAR-003',idempotencyKey:'k-history'});
  await assert.rejects(drepo.transaction(d=>adoptProviderInventory(d,'station-paris',2_000)),/historique de démonstration/);
  await assert.rejects(new MemoryRepository(freshStation()).transaction(d=>adoptProviderInventory(d,'s',2_000)),/aucune borne fabricant/);
+});
+
+test('a cabinet reported offline stops the station from selling, whether it answers online:false or refuses with "device not online"',async()=>{
+ const byRead=await synced(freshStation(),['REAL-A'],1_000,false);
+ assert.equal(byRead.data.stations[0].online,false);
+ assert.equal(byRead.data.stations[0].providerStatus,'OFFLINE');
+ assert.throws(()=>new RentalEngine().start(byRead.data,'c','s','k',2_000),/hors ligne/);
+
+ const live=freshStation();linkManufacturerStation(live,'s','BAJIE','DTA1',1_000);
+ const repo=new MemoryRepository(live);
+ await new ManufacturerSyncService(repo,{getDeviceInfo:async()=>{throw new ManufacturerApiError(2004,'Device not online.');}},{now:()=>2_000,attempts:1}).run({trigger:'SCHEDULED'});
+ assert.equal(repo.data.stations[0].online,false,'a confirmed "device not online" is an offline cabinet');
+ assert.equal(repo.data.stations[0].providerStatus,'ERROR');
+
+ const flaky=freshStation();linkManufacturerStation(flaky,'s','BAJIE','DTA1',1_000);
+ const frepo=new MemoryRepository(flaky);
+ await new ManufacturerSyncService(frepo,{getDeviceInfo:async()=>{throw new ManufacturerError('timeout',504,'TIMEOUT');}},{now:()=>2_000,attempts:1}).run({trigger:'SCHEDULED'});
+ assert.equal(frepo.data.stations[0].online,true,'a transport timeout says nothing about the cabinet — sales keep running');
+});
+
+test('a station never offers more batteries than a fresh cabinet read reported',async()=>{
+ // Real timestamps: getAvailability() is the sales gate and reads the clock itself.
+ const t=Date.now();
+ const repo=await synced(freshStation(),['REAL-A','REAL-B'],t);await repo.transaction(d=>adoptProviderInventory(d,'s',t+500));
+ assert.equal(stationViews(repo.data,t+1_000).find(s=>s.id==='s')!.available,2);
+ // The cabinet now reports a single battery: one left through the manufacturer's own flow.
+ await new ManufacturerSyncService(repo,{getDeviceInfo:async id=>cabinet(id,['REAL-A',null])},{now:()=>t+2_000}).run({trigger:'SCHEDULED'});
+ assert.equal(stationViews(repo.data,t+2_100).find(s=>s.id==='s')!.available,1,'local bookkeeping may not out-promise the cabinet');
+ assert.equal(new MockBatteryStationProvider().getAvailability(repo.data,'s'),1,'the sales gate applies the same cap');
+ assert.equal(stationViews(repo.data,t+2_000+PROVIDER_SNAPSHOT_FRESH_MS+1).find(s=>s.id==='s')!.available,2,'a stale read stops capping');
+});
+
+test('a lost battery that comes back, and a damaged one, can both be put right without the demo simulator',()=>{
+ const d=seedData('x');const battery=d.batteries.find(b=>b.status==='AVAILABLE')!;
+ const slot=d.slots.find(s=>s.batteryId===battery.id)!;
+ setBatteryService(d,battery.id,'MAINTENANCE');
+ assert.equal(battery.status,'MAINTENANCE');
+ assert.equal(d.slots.find(s=>s.id===slot.id)!.batteryId,battery.id,'a damaged battery stays physically in its slot');
+ assert.equal(stationViews(d).find(s=>s.id===slot.stationId)!.available,d.slots.filter(s=>s.stationId===slot.stationId&&d.batteries.some(b=>b.id===s.batteryId&&b.status==='AVAILABLE')).length);
+ validateData(d);
+ setBatteryService(d,battery.id,'AVAILABLE');assert.equal(battery.status,'AVAILABLE');validateData(d);
+
+ // A battery written off after 48 h, then physically returned.
+ const lostRental=d.rentals.find(r=>r.state==='OVERDUE')!;lostRental.state='LOST';
+ const lostPayment=d.payments.find(p=>p.rentalId===lostRental.id)!;
+ lostPayment.status='CAPTURED';lostPayment.capturedCents=lostPayment.authorizedCents;lostPayment.releasedCents=0;lostRental.paymentState='CAPTURED';
+ const lost=d.batteries.find(b=>b.id===lostRental.batteryId)!;lost.status='LOST';
+ const lostSlot=d.slots.find(s=>s.batteryId===lost.id);if(lostSlot)lostSlot.batteryId=null;
+ validateData(d);
+ assert.throws(()=>setBatteryService(d,lost.id,'AVAILABLE'),/station où la batterie a été retrouvée/);
+ assert.throws(()=>setBatteryService(d,lost.id,'MAINTENANCE'),/perdue/);
+ setBatteryService(d,lost.id,'AVAILABLE','station-lille');
+ assert.equal(lost.status,'AVAILABLE');
+ assert.equal(d.slots.find(s=>s.batteryId===lost.id)!.stationId,'station-lille');
+ validateData(d);
+
+ const rented=d.rentals.find(r=>r.state==='ACTIVE')!;
+ assert.throws(()=>setBatteryService(d,rented.batteryId!,'MAINTENANCE'),/en location/);
 });
