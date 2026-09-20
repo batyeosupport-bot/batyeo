@@ -12,6 +12,7 @@ import {ManufacturerBatteryEjector,ManufacturerBatteryStationProvider,Manufactur
 import {ManufacturerSyncService,linkManufacturerStation} from '../core/manufacturer-sync';
 import {MIN_PASSWORD_LENGTH,TEAM_ROLES,applyOwnPassword,createTeamMember,resetUserPassword,setUserDisabled} from '../core/accounts';
 import {providerHealth} from '../core/manufacturer-sync';
+import {partnerStatements} from '../core/statements';
 import {dashboard,rentalView,customerRentalView,stationViews,stationDisplaySnapshot,displayConfigFor,canViewFinance} from '../core/queries';
 import {checksumConfig} from '../core/runtime-config';
 import {heartbeatHealth} from '../core/heartbeat';
@@ -330,6 +331,12 @@ async function route(request:Request,path:string){
   }));
  }
 
+ if(path==='finance/statement'){
+  authorize(actor,'finance');
+  const input=z.object({from:z.number().int().nonnegative(),to:z.number().int().positive()}).strict().parse(body);
+  if(input.to<=input.from)throw new DomainError('La date de fin doit être après la date de début.',400);
+  return reply({statements:partnerStatements(await repository.read(),actor!,input.from,input.to)});
+ }
  if(path==='rental/refund'){
   authorize(actor,'finance');
   const input=z.object({rentalId:id,cents:z.number().int().min(1),reason:z.string().trim().min(3).max(200)}).strict().parse(body);
@@ -647,6 +654,9 @@ async function route(request:Request,path:string){
  }
  throw new DomainError('Opération introuvable.',404);
 }
-async function handle(request:Request,context:{params:Promise<{path:string[]}>}) {try{return await route(request,(await context.params).path.join('/'));}catch(e){if(e instanceof ZodError)return reply({error:e.issues[0]?.message==='Invalid literal value, expected true'?'Veuillez accepter les conditions.':'Vérifiez les informations saisies.',details:e.issues.map(i=>i.path.join('.'))},400);if(e instanceof DomainError)return reply({error:e.message},e.status);console.error('BATYEO request failed',e instanceof Error?e.message:'Unknown error');return reply({error:'Le service est temporairement indisponible. Réessayez dans un instant.'},503);}}
+async function handle(request:Request,context:{params:Promise<{path:string[]}>}) {const path=(await context.params).path.join('/');try{return await route(request,path);}catch(e){if(e instanceof ZodError)return reply({error:e.issues[0]?.message==='Invalid literal value, expected true'?'Veuillez accepter les conditions.':'Vérifiez les informations saisies.',details:e.issues.map(i=>i.path.join('.'))},400);if(e instanceof DomainError)return reply({error:e.message},e.status);// Structured enough to find the failing route in a log stream without leaking anything to the
+// caller: the generic 503 below is all the client ever sees, and an opaque 503 with no context is
+// exactly what made the DATABASE_URL outage take so long to diagnose.
+console.error(JSON.stringify({event:'request_failed',method:request.method,path,name:e instanceof Error?e.name:'Unknown',message:e instanceof Error?e.message:'Unknown error'}));return reply({error:'Le service est temporairement indisponible. Réessayez dans un instant.'},503);}}
 return {GET:handle,POST:handle};
 }
