@@ -26,7 +26,7 @@ export interface AsyncBatteryEjector { ejectBatteryAsync(stationId:string):Promi
  */
 export class StripeRentalCoordinator {
  private readonly engine:RentalEngine;
- constructor(private readonly payment:Pick<StripePaymentProvider,'authorize'|'capture'|'release'>,private readonly station:BatteryStationProvider=new MockBatteryStationProvider(),private readonly ejector?:AsyncBatteryEjector){this.engine=new RentalEngine(undefined,station);}
+ constructor(private readonly payment:Pick<StripePaymentProvider,'authorize'|'capture'|'release'|'refund'>,private readonly station:BatteryStationProvider=new MockBatteryStationProvider(),private readonly ejector?:AsyncBatteryEjector){this.engine=new RentalEngine(undefined,station);}
 
  async start(repository:Repository,customerId:string,stationId:string,key:string,now=Date.now()):Promise<Rental>{
   const created=await repository.transaction(d=>this.engine.create(d,customerId,stationId,key,now));
@@ -104,6 +104,16 @@ export class StripeRentalCoordinator {
   return repository.transaction(d=>this.engine.markPaymentCaptured(d,rentalId,prepared.amountCents,intent.id,now));
  }
 
+ /** Refund path. Stripe is called outside any transaction, like every other money move here, and
+  * the local record is written only once Stripe confirmed — a failed refund must never look done. */
+ async refund(repository:Repository,rentalId:string,cents:number,now=Date.now()):Promise<Rental>{
+  const snapshot=await repository.read();const payment=snapshot.payments.find(p=>p.rentalId===rentalId);
+  if(!payment?.providerReference)throw new DomainError('Référence Stripe manquante.',503);
+  if(payment.status!=='CAPTURED')throw new DomainError('Seul un paiement encaissé peut être remboursé.',409);
+  const intent=await this.payment.refund(payment.providerReference,cents,rentalId);
+  return repository.transaction(d=>this.engine.markRefunded(d,rentalId,cents,intent.id,now));
+ }
+
  /** Perte définitive : capture Stripe intégrale de la caution pour une location OVERDUE depuis plus de 48 h. Idempotent. */
  async captureOverdueLoss(repository:Repository,rentalId:string,now=Date.now()):Promise<Rental>{
   const snapshot=await repository.read();const rental=snapshot.rentals.find(r=>r.id===rentalId);if(!rental)throw new DomainError('Location introuvable.',404);
@@ -147,7 +157,31 @@ export class StripeRentalCoordinator {
 }
 
 export function applyStripeWebhook(d:Data,event:{id:string;type:string;data:{object:Record<string,unknown>}}){
- const object=event.data.object;const metadata=(object.metadata??{}) as Record<string,unknown>;const rentalId=typeof metadata.rentalId==='string'?metadata.rentalId:undefined;const intentId=typeof object.id==='string'?object.id:undefined;if(!rentalId||!intentId)return {ignored:true};
+ const object=event.data.object;
+ // A Dispute or a refunded Charge carries its own object, whose metadata is not the intent's:
+ // both are matched on the payment_intent they point at instead of on a rentalId that is absent.
+ if(event.type.startsWith('charge.dispute.')||event.type==='charge.refunded'){
+  const intent=typeof object.payment_intent==='string'?object.payment_intent:undefined;
+  const disputedPayment=intent?d.payments.find(p=>p.providerReference===intent):undefined;
+  const disputedRental=disputedPayment?d.rentals.find(r=>r.id===disputedPayment.rentalId):undefined;
+  if(!disputedPayment||!disputedRental)return {ignored:true};
+  if(event.type==='charge.refunded'){
+   const refunded=Number(object.amount_refunded??0);
+   if(!Number.isSafeInteger(refunded)||refunded<0)return {ignored:true};
+   // Stripe reports the running total, so this stays right whether the refund came from BATYEO
+   // or straight from the Stripe dashboard, and a redelivered event changes nothing.
+   const total=Math.min(refunded,disputedPayment.capturedCents);
+   if(total===(disputedPayment.refundedCents??0))return {duplicate:true};
+   disputedPayment.refundedCents=total;
+   d.events.push({id:crypto.randomUUID(),rentalId:disputedRental.id,at:Date.now(),type:'PAYMENT_REFUNDED',detail:`Remboursement confirmé par Stripe · ${total} centimes au total`});
+   return {refunded:true};
+  }
+  if(disputedPayment.disputedAt)return {duplicate:true};
+  disputedPayment.disputedAt=Date.now();
+  d.events.push({id:crypto.randomUUID(),rentalId:disputedRental.id,at:Date.now(),type:'PAYMENT_DISPUTED',detail:'Contestation bancaire ouverte par la banque du client'});
+  return {disputed:true};
+ }
+ const metadata=(object.metadata??{}) as Record<string,unknown>;const rentalId=typeof metadata.rentalId==='string'?metadata.rentalId:undefined;const intentId=typeof object.id==='string'?object.id:undefined;if(!rentalId||!intentId)return {ignored:true};
  const rental=d.rentals.find(r=>r.id===rentalId);const payment=d.payments.find(p=>p.rentalId===rentalId);if(!rental||!payment)return {ignored:true};
  payment.provider='stripe';payment.providerReference=intentId;
  if(event.type==='payment_intent.amount_capturable_updated'||event.type==='payment_intent.requires_capture'){if(payment.status==='PENDING'||payment.status==='AUTHORIZING'){payment.status='AUTHORIZED';payment.authorizedCents=Number(object.amount??payment.requestedCents??0);payment.requestedCents=payment.authorizedCents;rental.paymentState='AUTHORIZED';}}

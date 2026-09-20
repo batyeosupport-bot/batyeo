@@ -31,7 +31,7 @@ const id=z.string().min(1).max(100);
 const heartbeatSchema=z.object({runtimeVersion:z.string().min(1).max(50),configVersion:z.number().int().nonnegative().optional(),network:z.enum(['ONLINE','OFFLINE','DEGRADED']),appUptimeMs:z.number().int().nonnegative(),displayStatus:z.enum(['OK','ERROR','MAINTENANCE']),providerStatus:z.string().max(50).nullable(),lastCoreContactAt:z.number().int().nonnegative().nullable(),freeStorageBytes:z.number().int().nonnegative().nullable().optional(),localErrorCount:z.number().int().nonnegative().optional(),applicationHealth:z.enum(['OK','DEGRADED','ERROR']).optional(),errors:z.array(z.string().max(500)).max(20)});
 const reply=(body:unknown,status=200,headers:Record<string,string>={})=>Response.json(body,{status,headers:{'Cache-Control':'no-store','X-Content-Type-Options':'nosniff',...headers}});
 function audit(d:Data,a:Actor,action:string){d.audits.push({id:crypto.randomUUID(),userId:a.id,action,at:Date.now()});}
-export function createApi(repository:Repository,options:{demo:boolean;allowLegacyCredentials:boolean},dependencies:{stripeProvider?:Pick<StripePaymentProvider,'authorize'|'capture'|'release'>;manufacturerProvider?:Pick<ManufacturerBatteryStationProvider,'getDeviceInfo'|'listDevices'>;batteryEjector?:AsyncBatteryEjector;handleMediaUpload?:typeof handleUpload}={}) {
+export function createApi(repository:Repository,options:{demo:boolean;allowLegacyCredentials:boolean},dependencies:{stripeProvider?:Pick<StripePaymentProvider,'authorize'|'capture'|'release'|'refund'>;manufacturerProvider?:Pick<ManufacturerBatteryStationProvider,'getDeviceInfo'|'listDevices'>;batteryEjector?:AsyncBatteryEjector;handleMediaUpload?:typeof handleUpload}={}) {
  // A bad deployment config (a malformed key, an inconsistent flag combination) must surface as the
  // same clean {error, status} JSON as any other DomainError, not as an opaque empty 500: this used
  // to throw straight out of createApi(), before handle()'s try/catch even exists to catch it —
@@ -312,6 +312,19 @@ async function route(request:Request,path:string){
   }));
  }
 
+ if(path==='rental/refund'){
+  authorize(actor,'finance');
+  const input=z.object({rentalId:id,cents:z.number().int().min(1),reason:z.string().trim().min(3).max(200)}).strict().parse(body);
+  const target=(await repository.read()).rentals.find(r=>r.id===input.rentalId);
+  if(!target)throw new DomainError('Location introuvable.',404);
+  if(actor!.role==='PARTNER_ADMIN')throw new DomainError('Un partenaire ne peut pas rembourser un client.',403);
+  await repository.transaction(d=>{rateLimit(d,`refund-${actor!.id}`,20);});
+  const rental=stripeCoordinator
+   ?await stripeCoordinator.refund(repository,input.rentalId,input.cents)
+   :await repository.transaction(d=>engine.markRefunded(d,input.rentalId,input.cents));
+  await write('finance',(d,current)=>{audit(d,current,`Remboursement de ${input.cents} centimes · #${input.rentalId.slice(0,8).toUpperCase()} · ${input.reason}`);});
+  return reply({rental:rentalView(await repository.read(),rental)});
+ }
  if(path==='battery/service'){
   authorize(actor,'operate');
   const input=z.object({batteryId:id,action:z.enum(['MAINTENANCE','AVAILABLE']),stationId:id.optional()}).strict().parse(body);

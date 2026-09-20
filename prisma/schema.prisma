@@ -202,6 +202,8 @@ model Payment {
   authorizedCents Int
   capturedCents   Int @default(0)
   releasedCents   Int @default(0)
+  refundedCents   Int @default(0)
+  disputedAt      DateTime?
   status          String
   provider        String @default("mock")
   providerReference String?

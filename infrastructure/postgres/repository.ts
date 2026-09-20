@@ -31,7 +31,7 @@ export class PrismaRepository implements Repository {
    batteries:batteries.map(b=>({...b,status:b.status as Data['batteries'][number]['status']})),
    rentals:rentals.map(row=>{const {pricingId,pricingSnapshot,...r}=row;void pricingId;return ({...r,paymentState:r.paymentState&&PAYMENT_STATES.includes(r.paymentState as typeof PAYMENT_STATES[number])?r.paymentState as Data['rentals'][number]['paymentState']:undefined,physicalState:r.physicalState&&PHYSICAL_STATES.includes(r.physicalState as typeof PHYSICAL_STATES[number])?r.physicalState as Data['rentals'][number]['physicalState']:undefined,createdAt:r.createdAt.getTime(),startedAt:ms(r.startedAt),returnedAt:ms(r.returnedAt),deadline:ms(r.deadline),pricing:snapshot(pricingSnapshot)});}),
    events:events.map(e=>({...e,at:e.at.getTime()})),
-   payments:payments.map(p=>({...p,status:PAYMENT_STATES.includes(p.status as typeof PAYMENT_STATES[number])?p.status as Data['payments'][number]['status']:'UNKNOWN',provider:p.provider==='stripe'?'stripe':'mock',providerReference:p.providerReference,error:p.error,requestedCents:p.requestedCents??undefined})),
+   payments:payments.map(p=>({...p,disputedAt:ms(p.disputedAt),status:PAYMENT_STATES.includes(p.status as typeof PAYMENT_STATES[number])?p.status as Data['payments'][number]['status']:'UNKNOWN',provider:p.provider==='stripe'?'stripe':'mock',providerReference:p.providerReference,error:p.error,requestedCents:p.requestedCents??undefined})),
    pricing:pricing.map(row=>({id:row.id,hourlyCents:row.hourlyCents,capCents:row.capCents,depositCents:row.depositCents,deadlineHours:row.deadlineHours,commissionBps:row.commissionBps})),
    terms:terms.map(t=>({...t,acceptedAt:t.acceptedAt.getTime()})),
    tickets:tickets.map(t=>({...t,createdAt:t.createdAt.getTime(),status:t.status as Data['tickets'][number]['status']})),
@@ -75,7 +75,7 @@ export class PrismaRepository implements Repository {
   }
   await sync(before.rentals,after.rentals,r=>{const {pricing,...rest}=r;const data={...rest,createdAt:new Date(r.createdAt),startedAt:date(r.startedAt),returnedAt:date(r.returnedAt),deadline:date(r.deadline),pricingId:pricing.id,pricingSnapshot:pricing as unknown as Prisma.InputJsonValue};return tx.rental.upsert({where:{id:r.id},create:data,update:data});});
   await sync(before.events,after.events,e=>{const data={...e,at:new Date(e.at)};return tx.rentalEvent.create({data});});
-  await sync(before.payments,after.payments,p=>tx.payment.upsert({where:{id:p.id},create:p,update:p}));
+  await sync(before.payments,after.payments,p=>{const data={...p,refundedCents:p.refundedCents??0,disputedAt:date(p.disputedAt)};return tx.payment.upsert({where:{id:p.id},create:data,update:data});});
   await sync(before.terms,after.terms,t=>tx.termsAcceptance.create({data:{...t,acceptedAt:new Date(t.acceptedAt)}}));
   await sync(before.tickets,after.tickets,t=>{const data={...t,createdAt:new Date(t.createdAt)};return tx.supportTicket.upsert({where:{id:t.id},create:data,update:data});});
   await sync(before.audits,after.audits,a=>tx.auditLog.create({data:{...a,at:new Date(a.at)}}));

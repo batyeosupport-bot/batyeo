@@ -75,6 +75,28 @@ export class RentalEngine {
  prepareReturn(d:Data,id:string,stationId:string,now=Date.now(),detected=false):Rental {const r=d.rentals.find(r=>r.id===id);if(!r)throw new DomainError('Location introuvable.',404);if(r.state==='COMPLETED'||r.state==='RETURNED')return r;if(r.state==='ERROR'&&r.returnedAt!==null&&r.returnStationId!==null&&r.amountCents>0)return r;if(!['ACTIVE','OVERDUE'].includes(r.state)||!r.batteryId||r.startedAt===null)throw new DomainError('Cette location ne peut pas être restituée.');if(detected)this.placeReturned(d,stationId,r.batteryId);else this.station.returnBattery(d,stationId,r.batteryId);r.physicalState='RETURN_PENDING';this.move(d,r,'RETURN_PENDING',detected?'Retour confirmé par relecture fabricant':'Retour détecté par la station simulée',now);r.returnedAt=now;r.returnStationId=stationId;r.physicalState='RETURNED';this.move(d,r,'RETURNED','Batterie rendue et identifiée',now);r.amountCents=calculatePrice(now-r.startedAt+r.simulatedMinutes*60_000,r.pricing);r.commissionCents=commission(r.amountCents,r.pricing);this.event(d,r,'PRICE_CALCULATED',`Prix calculé : ${r.amountCents} centimes`,now);if(this.paymentFor(d,r))this.setPayment(r,'CAPTURING');return r;}
  completeSettlement(d:Data,id:string,now=Date.now()){const r=d.rentals.find(x=>x.id===id);if(!r)throw new DomainError('Location introuvable.',404);if(r.state==='COMPLETED')return r;if(r.state!=='RETURNED'&&!(r.state==='ERROR'&&r.returnedAt!==null&&r.amountCents>0))throw new DomainError('Le retour doit être confirmé avant la clôture.');this.setPayment(r,'CAPTURED');this.move(d,r,'COMPLETED','Location terminée · reçu disponible',now);return r;}
  markPaymentCaptured(d:Data,id:string,cents:number,providerReference?:string,now=Date.now()){const r=d.rentals.find(x=>x.id===id);if(!r)throw new DomainError('Location introuvable.',404);const p=this.paymentFor(d,r);if(!p)throw new DomainError('Autorisation introuvable.');if(p.status==='CAPTURED'){if(p.capturedCents!==cents)throw new DomainError('Capture déjà effectuée avec un autre montant.');return this.completeSettlement(d,id,now);}if(!['AUTHORIZED','CAPTURING','UNKNOWN'].includes(p.status)||cents<0||cents>p.authorizedCents)throw new DomainError('Capture refusée.');p.status='CAPTURED';p.capturedCents=cents;p.releasedCents=p.authorizedCents-cents;p.providerReference=providerReference??p.providerReference;this.setPayment(r,'CAPTURED');this.event(d,r,'PAYMENT_CAPTURED',`Capture ${p.provider==='stripe'?'Stripe TEST':'mock'} · reste de la caution libéré`,now);return this.completeSettlement(d,id,now);}
+ /** Records money actually given back. Deliberately leaves the rental state and `commissionCents`
+  * alone: the rental did happen, and the partner's share is frozen in its pricing snapshot by the
+  * settlement invariant — reopening it would break the very check that keeps money consistent.
+  * Net revenue is therefore capturedCents - refundedCents wherever it is reported. */
+ markRefunded(d:Data,id:string,cents:number,reference?:string,now=Date.now()){
+  const r=d.rentals.find(x=>x.id===id);if(!r)throw new DomainError('Location introuvable.',404);
+  const p=this.paymentFor(d,r);if(!p)throw new DomainError('Aucun paiement à rembourser.',404);
+  if(p.status!=='CAPTURED')throw new DomainError('Seul un paiement encaissé peut être remboursé.',409);
+  const already=p.refundedCents??0;
+  if(!Number.isSafeInteger(cents)||cents<=0||already+cents>p.capturedCents)throw new DomainError('Montant de remboursement invalide.',400);
+  p.refundedCents=already+cents;if(reference)p.providerReference=p.providerReference??reference;
+  this.event(d,r,'PAYMENT_REFUNDED',`Remboursement de ${cents} centimes`,now);
+  return r;
+ }
+ /** A bank dispute is the customer's card issuer pulling the money back; BATYEO cannot stop it and
+  * must not pretend the payment is still clean. Recorded so it surfaces in Finance and support. */
+ markDisputed(d:Data,id:string,detail:string,now=Date.now()){
+  const r=d.rentals.find(x=>x.id===id);if(!r)throw new DomainError('Location introuvable.',404);
+  const p=this.paymentFor(d,r);if(!p)throw new DomainError('Aucun paiement contesté.',404);
+  if(p.disputedAt)return r;
+  p.disputedAt=now;this.event(d,r,'PAYMENT_DISPUTED',detail,now);return r;
+ }
  markPaymentReleased(d:Data,id:string,now=Date.now()){const r=d.rentals.find(x=>x.id===id);if(!r)throw new DomainError('Location introuvable.',404);const p=this.paymentFor(d,r);if(!p)throw new DomainError('Autorisation introuvable.');if(p.status==='RELEASED')return p;if(!['AUTHORIZED','RELEASING','UNKNOWN'].includes(p.status))throw new DomainError('Libération refusée.');p.status='RELEASED';p.releasedCents=p.authorizedCents;p.capturedCents=0;this.setPayment(r,'RELEASED');this.event(d,r,'AUTH_RELEASED','Autorisation intégralement libérée',now);return p;}
  markPaymentUnknown(d:Data,id:string,error:string,now=Date.now()){const r=d.rentals.find(x=>x.id===id);if(!r)throw new DomainError('Location introuvable.',404);const p=this.paymentFor(d,r);if(p){p.status='UNKNOWN';p.error=error;}this.setPayment(r,'UNKNOWN');r.error=error;if(['RETURNED','EJECTING','PAYMENT_AUTH','ACTIVE','OVERDUE'].includes(r.state))this.move(d,r,'ERROR',error,now);return r;}
  return(d:Data,id:string,stationId:string,now=Date.now(),detected=false):Rental {const r=this.prepareReturn(d,id,stationId,now,detected);if(r.state==='COMPLETED')return r;const p=this.payment.capture(d,id,r.amountCents);this.setPayment(r,p.status==='CAPTURED'?'CAPTURED':undefined);this.event(d,r,'PAYMENT_CAPTURED','Capture mock · reste de la caution libéré',now);this.completeSettlement(d,id,now);return r;}

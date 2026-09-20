@@ -9,6 +9,10 @@ export class StripePaymentProvider {
  constructor(private readonly secretKey:string,private readonly transport:StripeTransport=(request)=>defaultTransport(secretKey,request)){if(!secretKey||!secretKey.startsWith('sk_test_'))throw new DomainError('Stripe TEST nécessite une clé sk_test_.',503);}
  async authorize(rentalId:string,cents:number):Promise<StripeIntent>{if(!Number.isSafeInteger(cents)||cents<=0)throw new DomainError('Montant d’autorisation invalide.');return this.call('/payment_intents',{amount:cents,currency:'eur',capture_method:'manual',metadata:{rentalId,provider:'batyeo'}},`rental-${rentalId}-authorize`);}
  async capture(intentId:string,cents:number,rentalId:string):Promise<StripeIntent>{if(!Number.isSafeInteger(cents)||cents<0)throw new DomainError('Montant de capture invalide.');return this.call(`/payment_intents/${encodeURIComponent(intentId)}/capture`,{amount_to_capture:cents,metadata:{rentalId}},`rental-${rentalId}-capture-${cents}`);}
+ /** Giving money back is the only correction available once a deposit is captured: a capture
+  * cannot be undone, and without this an admin mistake or a battery found after a 48 h write-off
+  * was final. Idempotency key includes the amount so a retry never doubles the refund. */
+ async refund(intentId:string,cents:number,rentalId:string):Promise<StripeIntent>{if(!Number.isSafeInteger(cents)||cents<=0)throw new DomainError('Montant de remboursement invalide.');return this.call('/refunds',{payment_intent:intentId,amount:cents,metadata:{rentalId}},`rental-${rentalId}-refund-${cents}`);}
  async release(intentId:string,rentalId:string):Promise<StripeIntent>{return this.call(`/payment_intents/${encodeURIComponent(intentId)}/cancel`,{},`rental-${rentalId}-release`);}
  private call(path:string,body:Record<string,unknown>,idempotencyKey:string){return this.transport({method:'POST',path,body,idempotencyKey}).catch(error=>{if(error instanceof DomainError)throw error;throw new DomainError('Stripe est temporairement indisponible.',503);});}
 }
