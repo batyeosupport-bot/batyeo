@@ -401,6 +401,26 @@ async function route(request:Request,path:string){
   if(input.to<=input.from)throw new DomainError('La date de fin doit être après la date de début.',400);
   return reply({statements:partnerStatements(await repository.read(),actor!,input.from,input.to)});
  }
+ if(path==='rental/force-return'){
+  authorize(actor,'operate');
+  const input=z.object({rentalId:id,stationId:id,reason:z.string().trim().min(3).max(200),returnedAt:z.number().int().positive().optional()}).strict().parse(body);
+  const snapshot=await repository.read();
+  const target=snapshot.rentals.find(r=>r.id===input.rentalId);
+  if(!target)throw new DomainError('Location introuvable.',404);
+  if(!['ACTIVE','OVERDUE'].includes(target.state)||target.startedAt===null)throw new DomainError('Seule une location en cours peut être clôturée à la main.',409);
+  if(!snapshot.stations.some(s=>s.id===input.stationId))throw new DomainError('Station de retour introuvable.',404);
+  // The operator may back-date the return to when the customer really handed the battery back, so a
+  // detection gap is never billed to the customer — but never before the rental began, nor in the future.
+  const now=Date.now(),at=input.returnedAt??now;
+  if(at<target.startedAt||at>now)throw new DomainError('L’heure de retour doit se situer entre le début de la location et maintenant.',400);
+  await repository.transaction(d=>{rateLimit(d,`force-return-${actor!.id}`,20);});
+  const note=`Retour confirmé à la main par BATYEO · ${input.reason}`;
+  const rental=stripeCoordinator
+   ?await stripeCoordinator.return(repository,input.rentalId,input.stationId,at,true,note)
+   :await repository.transaction(d=>engine.return(d,input.rentalId,input.stationId,at,true,note));
+  await write('operate',(d,current)=>{audit(d,current,`Retour clôturé à la main · #${input.rentalId.slice(0,8).toUpperCase()} · ${input.reason}`);});
+  return reply({rental:rentalView(await repository.read(),rental,canViewFinance(actor!),true)});
+ }
  if(path==='rental/refund'){
   authorize(actor,'finance');
   const input=z.object({rentalId:id,cents:z.number().int().min(1),reason:z.string().trim().min(3).max(200)}).strict().parse(body);

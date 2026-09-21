@@ -124,3 +124,28 @@ test('where money is real, a rental never starts on a bare PaymentIntent: no car
  const test=await new StripeRentalCoordinator(rehearsal.stripe).start(new MemoryRepository(seedData('x')),'c-test','station-paris','k-test');
  assert.equal(test.state,'ACTIVE');
 });
+
+test('an operator can close a rental the cabinet failed to detect: priced up to the real return time, deposit released, logged — and refused for a partner or a closed rental',async()=>{
+ const repo=new MemoryRepository(seedData('x'));const engine=new RentalEngine();
+ const t0=Date.now()-5*3_600_000;
+ const rental=await repo.transaction(d=>engine.start(d,'cust-force','station-paris','k-force',t0));
+ const post=(user:string,body:unknown)=>session(repo,user).then(token=>createApi(repo,{demo:false,allowLegacyCredentials:false},{}).POST(new Request(origin+'/api/core/rental/force-return',{method:'POST',headers:{origin,'content-type':'application/json',cookie:`batyeo_session=${token}`},body:JSON.stringify(body)}),{params:Promise.resolve({path:['rental','force-return']})}));
+ assert.equal((await post('partner-demo',{rentalId:rental.id,stationId:'station-paris',reason:'test'})).status,403,'a partner cannot close a rental');
+ assert.equal((await post('finance',{rentalId:rental.id,stationId:'station-paris',reason:'test'})).status,403,'nor a finance role: this is an operations act');
+ assert.equal((await post('operations',{rentalId:rental.id,stationId:'station-paris',reason:'test',returnedAt:t0-1})).status,400,'never before the rental began');
+ assert.equal((await post('operations',{rentalId:rental.id,stationId:'station-paris',reason:'test',returnedAt:Date.now()+3_600_000})).status,400,'never in the future');
+ assert.equal((await post('operations',{rentalId:rental.id,stationId:'nowhere',reason:'test'})).status,404);
+ assert.equal(repo.data.rentals.find(r=>r.id===rental.id)!.state,'ACTIVE','refused calls changed nothing');
+
+ // Handed back one hour after the start; the operator only notices five hours in — the customer pays for one hour, not five.
+ const res=await post('operations',{rentalId:rental.id,stationId:'station-paris',reason:'batterie rendue au comptoir',returnedAt:t0+3_600_000});
+ assert.equal(res.status,200);
+ const closed=repo.data.rentals.find(r=>r.id===rental.id)!;
+ assert.equal(closed.state,'COMPLETED');assert.equal(closed.returnedAt,t0+3_600_000);
+ assert.equal(closed.amountCents,closed.pricing.hourlyCents,'one hour billed, not the five it took someone to notice');
+ assert.ok(repo.data.events.some(e=>e.rentalId===rental.id&&e.detail.includes('Retour confirmé à la main')&&e.detail.includes('comptoir')));
+ assert.ok(repo.data.audits.some(a=>a.action.includes('Retour clôturé à la main')));
+ assert.equal(repo.data.batteries.find(b=>b.id===rental.batteryId)!.status,'AVAILABLE');
+ validateData(repo.data);
+ assert.equal((await post('operations',{rentalId:rental.id,stationId:'station-paris',reason:'again'})).status,409,'a closed rental cannot be closed again');
+});

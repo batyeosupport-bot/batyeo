@@ -17,6 +17,13 @@ Tout ce qui peut être fait par le code l'est. Ce document liste ce qu'il reste 
 où le faire est sûr. Chaque étape dit ce qu'elle débloque. Ne saute pas d'étape : les dernières
 font sortir de vraies batteries et prendre de l'argent réel.
 
+**Piège à connaître : migrations avant déploiement.** Vercel déploie le code dès qu'il est poussé,
+mais **ne migre jamais la base**. Si le code attend une colonne que la base n'a pas encore, *toute*
+l'API répond « service temporairement indisponible » (503). À chaque fois que le dossier
+`prisma/migrations/` s'agrandit : appliquer `pnpm db:migrate` sur la base concernée **avant** (ou
+tout de suite après) le déploiement. Diagnostic : Vercel → Deployments → Logs → chercher la ligne
+JSON `request_failed`, qui nomme la route et l'erreur.
+
 Règle générale : les commandes qui touchent une base de données exigent que tu écrives toi-même
 l'hôte de la base visée (`BATYEO_CONFIRM_DATABASE`). C'est volontaire : une mauvaise variable dans
 ton terminal est la façon la plus simple d'abîmer la production.
@@ -170,6 +177,9 @@ Avec **ta propre carte**, sur la vraie borne :
       blocage sur ta carte disparaît (vérifie dans Stripe que le paiement est « annulé »).
 - [ ] La rendre : la location se clôt, l'empreinte est libérée, seul le prix est encaissé.
 - [ ] Ouvrir la location dans l'admin : montants cohérents, contact client visible.
+- [ ] Si la borne n'a pas détecté le retour : Admin → Locations → la location → **Clôturer : batterie
+      rendue** (choisir la borne, saisir un motif). Le prix est calculé jusqu'à maintenant et la
+      caution est libérée.
 - [ ] Te **rembourser** depuis le détail de la location, puis vérifier dans Stripe.
 - [ ] Débrancher la borne, puis recharger la page des stations : elle passe **hors ligne** et n'est
       plus proposée (dans les 2 minutes qui suivent, sans webhook).

@@ -199,8 +199,8 @@ export class StripeRentalCoordinator {
   catch(releaseError){const releaseMessage=releaseError instanceof Error?releaseError.message:'Stripe release failed';return repository.transaction(d=>this.engine.markPaymentUnknown(d,rentalId,releaseMessage,now));}
  }
 
- async return(repository:Repository,rentalId:string,stationId:string,now=Date.now(),detected=false):Promise<Rental>{
-  const prepared=await repository.transaction(d=>this.engine.prepareReturn(d,rentalId,stationId,now,detected));
+ async return(repository:Repository,rentalId:string,stationId:string,now=Date.now(),detected=false,note?:string):Promise<Rental>{
+  const prepared=await repository.transaction(d=>this.engine.prepareReturn(d,rentalId,stationId,now,detected,note));
   if(prepared.state==='COMPLETED')return prepared;
   const snapshot=await repository.read();const payment=snapshot.payments.find(p=>p.rentalId===rentalId);if(!payment?.providerReference)throw new DomainError('Référence Stripe manquante.',503);
   if(payment.status==='CAPTURED')return repository.transaction(d=>this.engine.completeSettlement(d,rentalId,now));
