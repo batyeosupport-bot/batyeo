@@ -68,3 +68,16 @@ test('PostgreSQL migrations and constraints execute on the PGlite PostgreSQL eng
   await assert.rejects(()=>db.exec(`UPDATE "Rental" SET "amountCents"=1 WHERE id='r'`),'LOST is an immutable terminal state');
  }finally{await db.close();}
 });
+
+test('the two September 20 migrations can be replayed without error, so pasting them into a SQL editor and running them again later is harmless',async()=>{
+ const db=new PGlite();
+ try{
+  const migrations=readdirSync('prisma/migrations',{withFileTypes:true}).filter(entry=>entry.isDirectory()).map(entry=>entry.name).sort();
+  for(const migration of migrations) await db.exec(readFileSync(`prisma/migrations/${migration}/migration.sql`,'utf8'));
+  for(const migration of ['202609200001_refund_and_dispute','202609200002_customer_contact'])await db.exec(readFileSync(`prisma/migrations/${migration}/migration.sql`,'utf8'));
+  const columns=await db.query<{column_name:string}>(`SELECT column_name FROM information_schema.columns WHERE table_name IN ('Payment','Rental') AND column_name IN ('refundedCents','disputedAt','contactEmail')`);
+  assert.equal(columns.rows.length,3);
+  const constraints=await db.query(`SELECT 1 FROM pg_constraint WHERE conname='Payment_refund_bounds'`);
+  assert.equal(constraints.rows.length,1,'replaying never duplicates the check constraint');
+ }finally{await db.close();}
+});

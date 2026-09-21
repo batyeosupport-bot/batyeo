@@ -3,4 +3,5 @@
 -- batterie non rendue sans avoir jamais eu le moyen de prevenir la personne, et un cookie efface
 -- lui faisait perdre l'acces a sa propre location. Facultatif de bout en bout : refuser de la
 -- donner ne doit jamais empecher de louer.
-ALTER TABLE "Rental" ADD COLUMN "contactEmail" TEXT;
+-- Rejouable sans erreur (IF NOT EXISTS), comme la migration precedente.
+ALTER TABLE "Rental" ADD COLUMN IF NOT EXISTS "contactEmail" TEXT;
