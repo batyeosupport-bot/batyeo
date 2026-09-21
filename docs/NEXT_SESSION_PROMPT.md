@@ -86,6 +86,8 @@ Route `system/status` : mode de paiement, fournisseur de la borne, verrou d'éje
 
 > **Audit complet du 2026-09-20 : `docs/AUDIT.md`** — incohérences vérifiées dans le code (borne hors ligne invisible, disponibilité locale, batterie perdue irrécupérable, aucun remboursement, aucun versement partenaire), manques (email, client identifié par un simple cookie, tâches planifiées, surveillance) et inventaire des mentions « démo » à retirer. Un bug d'argent y a été trouvé et corrigé. À lire avant de planifier la suite.
 
+> **CRITIQUE (2026-09-21) : le parcours client ne collecte aucune carte.** `StripePaymentProvider.authorize` crée un PaymentIntent sans jamais y attacher de moyen de paiement, et l'ancien code le marquait « autorisé » sans lire son statut. `stripe_live` est désormais refusé tant que l'autorisation n'est pas `requires_capture` (`requireConfirmedAuthorization`), donc **le mode réel est bloqué jusqu'à la construction de la collecte de carte** : Stripe Payment Element côté téléphone, nouvelle route qui vérifie l'intent côté serveur avant d'éjecter, expiration des locations jamais confirmées. C'est le premier chantier à faire.
+
 > **Mise en service : `docs/GO_LIVE.md`** — checklist ordonnée, avec les commandes exactes. Tout ce qui pouvait se faire par le code est fait (2026-09-21) : déplacement de la borne réelle (`manufacturer/move-link`), amorçage de production (`pnpm db:bootstrap`, `--retire-demo`), envoi d'emails complet mais éteint, détection de borne hors ligne et de retour sans webhook (lecture à la demande, limitée). Ce qui reste est **uniquement** externe : Tony, Stripe, statut juridique, Resend, secrets Vercel, migrations, terrain.
 
 ## Bilan de complétude (2026-09-19) — le projet n'est PAS fini pour de vrais clients

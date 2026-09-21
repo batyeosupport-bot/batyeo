@@ -294,6 +294,7 @@ class MainActivity : AppCompatActivity() {
                         )
                         if (result.isSuccess) {
                             coreUrl.setText(settings.coreUrl())
+                            kioskUrl.setText(settings.kioskUrl())
                             handler.post(refreshConfig)
                         }
                     }

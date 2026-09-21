@@ -34,14 +34,15 @@ async function enroll(repo:MemoryRepository,stationId:string,runtimeId:string){
  const {tokenId,token}=await issued.json() as {tokenId:string;token:string};
  const enrolled=await call(repo,'runtime/enroll',{tokenId,token,runtimeId});
  assert.equal(enrolled.status,201);
- const {credential,version}=await enrolled.json() as {credential:string;version:number};
- return {credential,version,tokenId,token};
+ const {credential,version,stationPublicId}=await enrolled.json() as {credential:string;version:number;stationPublicId:string};
+ return {credential,version,tokenId,token,stationPublicId};
 }
 
 test('runtime pairing loop: enrollment-token issues a one-time token that enroll consumes into a scoped credential',async()=>{
  const repo=new MemoryRepository(seedData('unused'));
  const stationId=repo.data.stations[0].id;
- const {credential}=await enroll(repo,stationId,'runtime-1');
+ const {credential,stationPublicId}=await enroll(repo,stationId,'runtime-1');
+ assert.equal(stationPublicId,repo.data.stations[0].publicId,'pairing tells the cabinet which kiosk page is its own, so no second manual step is needed');
  const config=await call(repo,'runtime/config',undefined,runtimeHeaders('runtime-1',credential));
  assert.equal(config.status,200);
  const body=await config.json() as {envelope:{config:unknown;checksum:string}};

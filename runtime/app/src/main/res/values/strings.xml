@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">BATYEO Runtime</string>
-    <string name="default_kiosk_url">https://batyeo-web.anismeslin5.chatgpt.site/kiosk/paris-demo</string>
+    <string name="default_kiosk_url">https://batyeo.vercel.app/</string>
 </resources>

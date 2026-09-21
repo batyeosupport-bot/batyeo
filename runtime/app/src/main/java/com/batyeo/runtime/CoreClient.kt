@@ -60,7 +60,12 @@ class CoreClient(private val context: Context, private val settings: KioskSettin
         return runCatching {
             val credential = JSONObject(response).getString("credential")
             val stationId = JSONObject(response).optString("stationId")
-            settings.save(base, settings.kioskUrl(), runtimeId, credential)
+            // Pairing also decides what the screen shows: the station's own kiosk page, on the same
+            // site the pairing code came from. Otherwise a freshly paired cabinet keeps showing
+            // whatever default URL the APK was built with, and a second manual step is needed.
+            val publicId = JSONObject(response).optString("stationPublicId")
+            val kioskUrl = if (publicId.isNotBlank()) base.trimEnd('/').removeSuffix("/api/core") + "/kiosk/" + publicId else settings.kioskUrl()
+            settings.save(base, kioskUrl, runtimeId, credential)
             settings.markCoreContact()
             stationId
         }

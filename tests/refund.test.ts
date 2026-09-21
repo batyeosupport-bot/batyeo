@@ -99,3 +99,28 @@ test('the contact email is optional, normalised, and never handed to a partner',
  const partnerView=dashboard(d,{id:'partner-demo',role:'PARTNER_ADMIN',partnerId:'partner-a'}).rentals.find(r=>r.id===withEmail.id)!;
  assert.equal(partnerView.contactEmail,undefined,'a venue owner never sees who rented');
 });
+
+test('where money is real, a rental never starts on a bare PaymentIntent: no card attached means no battery and no charge',async()=>{
+ const {StripeRentalCoordinator}=await import('../core/stripe-coordinator');
+ const build=(status:string)=>{
+  const calls:string[]=[];
+  const stripe={authorize:async()=>{calls.push('authorize');return {id:'pi_bare',status,amount:2000};},capture:async()=>{calls.push('capture');return {id:'pi_bare',status:'succeeded',amount:2000};},release:async()=>{calls.push('release');return {id:'pi_bare',status:'canceled',amount:0};},refund:async()=>({id:'re',status:'ok',amount:0})};
+  return {calls,stripe};
+ };
+ // Live: an intent that is not `requires_capture` holds nothing, so the rental must be refused and the intent cancelled.
+ const bare=build('requires_payment_method');const repo=new MemoryRepository(seedData('x'));
+ const live=new StripeRentalCoordinator(bare.stripe,undefined,undefined,{requireConfirmedAuthorization:true});
+ const refused=await live.start(repo,'c-live','station-paris','k-live-1');
+ assert.equal(refused.state,'PAYMENT_FAILED');
+ assert.equal(refused.batteryId,null,'no battery left the cabinet');
+ assert.deepEqual(bare.calls,['authorize','release'],'the empty intent was cancelled, nothing captured');
+ assert.match(refused.error??'',/n’a pas été confirmé/);
+ // Live: a genuinely authorized intent goes through.
+ const good=build('requires_capture');
+ const ok=await new StripeRentalCoordinator(good.stripe,undefined,undefined,{requireConfirmedAuthorization:true}).start(new MemoryRepository(seedData('x')),'c-ok','station-paris','k-live-2');
+ assert.equal(ok.state,'ACTIVE');
+ // Test mode keeps its existing behaviour: it is a rehearsal, and says so on every screen.
+ const rehearsal=build('requires_payment_method');
+ const test=await new StripeRentalCoordinator(rehearsal.stripe).start(new MemoryRepository(seedData('x')),'c-test','station-paris','k-test');
+ assert.equal(test.state,'ACTIVE');
+});

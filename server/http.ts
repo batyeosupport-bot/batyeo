@@ -51,7 +51,7 @@ export function createApi(repository:Repository,options:{demo:boolean;allowLegac
   // Only ever constructed on an explicit opt-in that validateManufacturerStartup has already found
   // coherent; without it the coordinator keeps its mock path and no rental can move real hardware.
   batteryEjector=dependencies.batteryEjector??(manufacturerClient&&manufacturerConfig?.allowPhysicalActions?new ManufacturerBatteryEjector(manufacturerClient,repository):undefined);
-  stripeCoordinator=paymentMode==='stripe_test'?new StripeRentalCoordinator(dependencies.stripeProvider??new StripePaymentProvider(process.env.STRIPE_SECRET_KEY!),station,batteryEjector):undefined;
+  stripeCoordinator=paymentMode==='stripe_test'||paymentMode==='stripe_live'?new StripeRentalCoordinator(dependencies.stripeProvider??new StripePaymentProvider(process.env.STRIPE_SECRET_KEY!),station,batteryEjector,{requireConfirmedAuthorization:paymentMode==='stripe_live'}):undefined;
  } catch(e) { startupError=e; }
 // A visitor looking at the site or at an open rental is the best signal that something may have
 // changed on a cabinet. Until the manufacturer webhook is registered this is what keeps offline
@@ -165,7 +165,7 @@ async function route(request:Request,path:string){
   }
   if(request.method==='POST'&&path==='runtime/terminal-connection-token'){
    authorizeRuntime(credential,'payment/connect',requested);
-   if(paymentMode!=='stripe_test')throw new DomainError('Stripe Terminal non configuré sur ce serveur.',503);
+   if(paymentMode==='mock')throw new DomainError('Stripe Terminal non configuré sur ce serveur.',503);
    const {secret}=await createTerminalConnectionToken(process.env.STRIPE_SECRET_KEY!);
    return reply({secret});
   }
@@ -211,7 +211,7 @@ async function route(request:Request,path:string){
   if(path==='manufacturer/stations'){authorize(actor,'operate');if(!manufacturerProvider)throw new DomainError('Provider fabricant non configuré.',503);const search=new URL(request.url).searchParams;const query=z.object({coordType:z.string().min(1).max(30),zoomLevel:z.coerce.number().int(),lat:z.coerce.number().finite(),lng:z.coerce.number().finite(),showPrice:z.enum(['true','false']).transform(value=>value==='true')}).parse(Object.fromEntries(search));return reply({stations:await manufacturerProvider.listDevices(query)});}
   // Read of the merchant's own Stripe account, so an operator can reuse a Location it already has
   // — including one created earlier from the manufacturer's platform — instead of duplicating it.
-  if(path==='stripe/terminal-locations'){authorize(actor,'settings');if(paymentMode!=='stripe_test')throw new DomainError('Stripe TEST n’est pas configuré sur ce serveur.',503);return reply({locations:await listTerminalLocations(process.env.STRIPE_SECRET_KEY!)});}
+  if(path==='stripe/terminal-locations'){authorize(actor,'settings');if(paymentMode==='mock')throw new DomainError('Stripe n’est pas configuré sur ce serveur.',503);return reply({locations:await listTerminalLocations(process.env.STRIPE_SECRET_KEY!)});}
   if(path.startsWith('manufacturer/stations/')){authorize(actor,'read');if(!manufacturerProvider)throw new DomainError('Provider fabricant non configuré.',503);const local=d.stations.find(s=>s.id===path.split('/')[2]||s.publicId===path.split('/')[2]);if(!local)throw new DomainError('Station introuvable.',404);assertTenant(actor!,local.partnerId);const link=d.stationProviderLinks.find(row=>row.stationId===local.id&&row.active),externalId=link?.externalId??local.providerDeviceId;if(!externalId)throw new DomainError('Identifiant fabricant non configuré pour cette station.',409);const snapshot=await manufacturerProvider.getDeviceInfo(externalId);return reply({station:snapshot,differences:reconcileManufacturerStation(d,local,snapshot)});}
   if(path.startsWith('rentals/')){
    authorize(actor,'read');const r=d.rentals.find(r=>r.id===path.split('/')[1]);if(!r)throw new DomainError('Location introuvable.',404);assertTenant(actor!,r.partnerId);return reply(rentalView(d,r,canViewFinance(actor!),!actor!.role.startsWith('PARTNER_')));
@@ -235,7 +235,7 @@ async function route(request:Request,path:string){
    if(d.runtimeCredentials.some(c=>c.stationId===target.id&&c.revokedAt===null))throw new DomainError('Station déjà associée à un runtime actif.',409);
    enrollment.usedAt=now;
    d.runtimeCredentials.push({id:credentialId,runtimeId:input.runtimeId,stationId:target.id,partnerId:target.partnerId,digest:credentialDigest,version:1,createdAt:now,lastUsedAt:null,revokedAt:null});
-   return {runtimeId:input.runtimeId,stationId:target.id,version:1};
+   return {runtimeId:input.runtimeId,stationId:target.id,stationPublicId:target.publicId,version:1};
   });
   return reply({...result,credential:secret},201);
  }
@@ -513,7 +513,7 @@ async function route(request:Request,path:string){
  if(path==='station/stripe-location/create'){
   // One action instead of a round trip through the Stripe dashboard: create the Location in the
   // merchant's own account from the venue it belongs to, then assign it to the station.
-  authorize(actor,'settings');if(paymentMode!=='stripe_test')throw new DomainError('Stripe TEST n’est pas configuré sur ce serveur.',503);
+  authorize(actor,'settings');if(paymentMode==='mock')throw new DomainError('Stripe n’est pas configuré sur ce serveur.',503);
   const input=z.object({stationId:id,country:z.string().trim().length(2),postalCode:z.string().trim().max(20).optional(),state:z.string().trim().max(100).optional(),displayName:z.string().trim().min(1).max(120).optional()}).strict().parse(body);
   const source=await repository.read();const target=source.stations.find(s=>s.id===input.stationId);if(!target)throw new DomainError('Station introuvable.',404);
   assertTenant(actor!,target.partnerId);

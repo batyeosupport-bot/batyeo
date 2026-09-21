@@ -1,5 +1,15 @@
 # Mise en service — checklist dans l'ordre
 
+> **BLOQUANT — à lire avant tout.** Le parcours client **ne collecte aucune carte bancaire**. Le
+> serveur crée un paiement Stripe mais rien ne permet au client d'y saisir sa carte : ni la page de
+> location (aucun formulaire), ni la borne (le lecteur de carte s'arrête volontairement avant de
+> débiter). En mode `stripe_live`, BATYEO **refuse donc désormais** toute location (« le paiement
+> n'a pas été confirmé ») plutôt que de donner une batterie sans caution. Tant que la collecte de
+> carte n'est pas construite, **le mode réel ne peut pas fonctionner**. Le mode `stripe_test` reste
+> une répétition : il laisse partir la location sans carte, et le dit sur chaque écran.
+> La solution recommandée : payer depuis le téléphone (Stripe Payment Element après le scan du QR,
+> Apple Pay / Google Pay inclus), ce qui rend le lecteur de carte de la borne inutile.
+
 Tout ce qui peut être fait par le code l'est. Ce document liste ce qu'il reste à faire, dans l'ordre
 où le faire est sûr. Chaque étape dit ce qu'elle débloque. Ne saute pas d'étape : les dernières
 font sortir de vraies batteries et prendre de l'argent réel.
@@ -110,11 +120,47 @@ Dans l'admin, dans cet ordre :
    une station neuve.
 4. Vérifier dans **Système** que la synchronisation est « À jour ».
 
+## 5 bis. L'écran de la borne
+
+L'écran affiché sur la borne est une **application Android à installer** (`runtime/`, package
+`com.batyeo.runtime`). Elle affiche la page `/kiosk/<identifiant public>` : nom du lieu, état,
+nombre de batteries, **le QR code pour louer**, et un carrousel d'images ou vidéos après 60 s
+d'inactivité. Le client loue **depuis son téléphone** en scannant le QR ; l'écran n'est pas une
+caisse tactile.
+
+1. **Construire l'APK** (à faire sur une machine avec JDK 17 et l'Android SDK, par exemple Android
+   Studio) : `cd runtime && ./gradlew assembleRelease`. L'APK de test du 18 septembre existe
+   (`runtime/app/build/outputs/apk/debug/app-debug.apk`) mais il a été construit **avant** la
+   correction de l'adresse par défaut et de l'appairage en un geste : avec lui, saisis l'adresse
+   d'affichage à la main (étape 4).
+2. **L'installer sur la borne.** Cela dépend de l'Android de la borne (à vérifier : version 8.0
+   minimum, installation d'applications tierces autorisée, câble USB ou accès réseau pour `adb`).
+   Avec `adb` : `adb install -r app-debug.apk`. Sinon, clé USB puis gestionnaire de fichiers.
+3. **Générer le code d'appairage** : Admin → Affichage → ligne de la station → **Appairer**. Le code
+   est à usage unique et expire vite.
+4. **Sur la borne** : appuyer **5 secondes** sur l'écran → « Configuration de la borne » → coller le
+   code → **Appairer cette borne**. Avec la nouvelle version, l'écran à afficher se règle tout seul
+   (`https://TON-DOMAINE/kiosk/<identifiant public>`) ; avec l'ancienne, renseigne « URL
+   d'affichage » à la main puis **Enregistrer**.
+5. **En faire l'écran par défaut** : appuie sur Accueil et choisis « BATYEO Runtime » → « Toujours ».
+   L'application démarre ensuite toute seule au redémarrage de la borne.
+6. **Vérifier** dans Admin → Affichage : la borne doit apparaître « répond » avec un signal récent.
+
+À savoir :
+- **Ne supprime pas l'application de ChargeNow** : c'est très probablement elle qui garde la borne
+  connectée au cloud dont BATYEO dépend. La tienne s'affiche par-dessus.
+- L'affichage verrouillé (impossible de sortir de l'application) ne fonctionne que si l'application
+  est configurée comme « propriétaire de l'appareil » (`adb shell dpm set-device-owner …`, possible
+  seulement sur une borne sans compte Google). Sans cela, elle tourne quand même, sans verrou.
+- Les images du carrousel se gèrent dans Admin → Affichage → Médias (le téléversement de fichiers
+  demande d'activer Vercel Blob).
+
 ## 6. Le test qui décide de tout — avant d'ouvrir au public
 
 Avec **ta propre carte**, sur la vraie borne :
 
-- [ ] Scanner le QR, louer, prendre la batterie : elle sort physiquement.
+- [ ] Scanner le QR, louer, prendre la batterie : elle sort physiquement. *(Impossible en mode réel
+      tant que la collecte de carte n'existe pas — voir l'encadré en tête.)*
 - [ ] La rendre : la location se clôt, l'empreinte est libérée, seul le prix est encaissé.
 - [ ] Ouvrir la location dans l'admin : montants cohérents, contact client visible.
 - [ ] Te **rembourser** depuis le détail de la location, puis vérifier dans Stripe.

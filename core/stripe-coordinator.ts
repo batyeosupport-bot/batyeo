@@ -26,7 +26,7 @@ export interface AsyncBatteryEjector { ejectBatteryAsync(stationId:string):Promi
  */
 export class StripeRentalCoordinator {
  private readonly engine:RentalEngine;
- constructor(private readonly payment:Pick<StripePaymentProvider,'authorize'|'capture'|'release'|'refund'>,private readonly station:BatteryStationProvider=new MockBatteryStationProvider(),private readonly ejector?:AsyncBatteryEjector){this.engine=new RentalEngine(undefined,station);}
+ constructor(private readonly payment:Pick<StripePaymentProvider,'authorize'|'capture'|'release'|'refund'>,private readonly station:BatteryStationProvider=new MockBatteryStationProvider(),private readonly ejector?:AsyncBatteryEjector,private readonly options:{requireConfirmedAuthorization?:boolean}={}){this.engine=new RentalEngine(undefined,station);}
 
  async start(repository:Repository,customerId:string,stationId:string,key:string,now=Date.now(),contactEmail?:string):Promise<Rental>{
   const created=await repository.transaction(d=>this.engine.create(d,customerId,stationId,key,now,contactEmail));
@@ -34,6 +34,15 @@ export class StripeRentalCoordinator {
   let intent:StripeIntent;
   try {intent=await this.payment.authorize(created.id,created.pricing.depositCents);}
   catch(error){const message=error instanceof Error?error.message:'Stripe authorization failed';await repository.transaction(d=>this.engine.markPaymentFailed(d,created.id,message,'stripe',now));return (await repository.read()).rentals.find(r=>r.id===created.id)!;}
+  // Creating a PaymentIntent is not an authorization: with no card attached it sits in
+  // `requires_payment_method` and holds nothing. Nothing in the customer flow attaches one yet, so
+  // where money is real a rental must never start on the strength of a bare intent — that would hand
+  // out a battery with no deposit behind it and fail only at capture, when the customer is gone.
+  if(this.options.requireConfirmedAuthorization&&intent.status!=='requires_capture'){
+   await this.payment.release(intent.id,created.id).catch(()=>undefined);
+   await repository.transaction(d=>this.engine.markPaymentFailed(d,created.id,'Le paiement n’a pas été confirmé par la banque. Aucun montant n’est débité.','stripe',now));
+   return (await repository.read()).rentals.find(r=>r.id===created.id)!;
+  }
   await repository.transaction(d=>this.engine.markPaymentAuthorized(d,created.id,created.pricing.depositCents,'stripe',intent.id,now));
   if(!this.ejector){
    // Mock/demo station: ejectBattery() is synchronous and Data-mutating, so begin+eject+activate
