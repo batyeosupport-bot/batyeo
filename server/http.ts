@@ -10,6 +10,8 @@ import {StripeRentalCoordinator,type AsyncBatteryEjector} from '../core/stripe-c
 import {resolvePaymentMode,type PaymentMode} from '../core/payment-mode';
 import {ManufacturerBatteryEjector,ManufacturerBatteryStationProvider,ManufacturerHttpClient,reconcileManufacturerStation,resolveManufacturerConfig,validateManufacturerStartup} from '../core/manufacturer';
 import {ManufacturerSyncService,linkManufacturerStation,moveManufacturerLink} from '../core/manufacturer-sync';
+import {resolveMailer,type MailConfig} from '../core/mailer';
+import {deliverNotices,warnedLongEnough,planOpsDigest} from '../core/notifications';
 import {MIN_PASSWORD_LENGTH,TEAM_ROLES,applyOwnPassword,createTeamMember,resetUserPassword,setUserDisabled} from '../core/accounts';
 import {providerHealth} from '../core/manufacturer-sync';
 import {partnerStatements} from '../core/statements';
@@ -26,25 +28,26 @@ import {handleUpload,type HandleUploadBody} from '@vercel/blob/client';
 const MEDIA_UPLOAD_LIMITS={IMAGE:{types:['image/jpeg','image/png','image/webp','image/gif'],maxBytes:15*1024*1024},VIDEO:{types:['video/mp4','video/webm','video/quicktime'],maxBytes:150*1024*1024}} as const;
 
 const engine=new RentalEngine();
+const ON_DEMAND_MIN_GAP_MS=30_000;
 const station=new MockBatteryStationProvider();
 const id=z.string().min(1).max(100);
 /** Telemetry a station runtime reports; `stationId`/`runtimeId`/`at` are taken from the credential and the server clock, never from the body. */
 const heartbeatSchema=z.object({runtimeVersion:z.string().min(1).max(50),configVersion:z.number().int().nonnegative().optional(),network:z.enum(['ONLINE','OFFLINE','DEGRADED']),appUptimeMs:z.number().int().nonnegative(),displayStatus:z.enum(['OK','ERROR','MAINTENANCE']),providerStatus:z.string().max(50).nullable(),lastCoreContactAt:z.number().int().nonnegative().nullable(),freeStorageBytes:z.number().int().nonnegative().nullable().optional(),localErrorCount:z.number().int().nonnegative().optional(),applicationHealth:z.enum(['OK','DEGRADED','ERROR']).optional(),errors:z.array(z.string().max(500)).max(20)});
 const reply=(body:unknown,status=200,headers:Record<string,string>={})=>Response.json(body,{status,headers:{'Cache-Control':'no-store','X-Content-Type-Options':'nosniff',...headers}});
 function audit(d:Data,a:Actor,action:string){d.audits.push({id:crypto.randomUUID(),userId:a.id,action,at:Date.now()});}
-export function createApi(repository:Repository,options:{demo:boolean;allowLegacyCredentials:boolean},dependencies:{stripeProvider?:Pick<StripePaymentProvider,'authorize'|'capture'|'release'|'refund'>;manufacturerProvider?:Pick<ManufacturerBatteryStationProvider,'getDeviceInfo'|'listDevices'>;batteryEjector?:AsyncBatteryEjector;handleMediaUpload?:typeof handleUpload}={}) {
+export function createApi(repository:Repository,options:{demo:boolean;allowLegacyCredentials:boolean},dependencies:{mailConfig?:MailConfig;stripeProvider?:Pick<StripePaymentProvider,'authorize'|'capture'|'release'|'refund'>;manufacturerProvider?:Pick<ManufacturerBatteryStationProvider,'getDeviceInfo'|'listDevices'>;batteryEjector?:AsyncBatteryEjector;handleMediaUpload?:typeof handleUpload}={}) {
  // A bad deployment config (a malformed key, an inconsistent flag combination) must surface as the
  // same clean {error, status} JSON as any other DomainError, not as an opaque empty 500: this used
  // to throw straight out of createApi(), before handle()'s try/catch even exists to catch it —
  // confirmed live on 2026-09-19 when a misconfigured STRIPE_SECRET_KEY produced exactly that empty
  // response instead of the "Stripe TEST nécessite STRIPE_SECRET_KEY." message it was throwing.
  let paymentMode:PaymentMode,manufacturerProvider:Pick<ManufacturerBatteryStationProvider,'getDeviceInfo'|'listDevices'>|undefined,manufacturerSync:ManufacturerSyncService|undefined,batteryEjector:AsyncBatteryEjector|undefined,stripeCoordinator:StripeRentalCoordinator|undefined;
- let startupError:unknown,physicalActionsAllowed=false;
+ let startupError:unknown,physicalActionsAllowed=false,mailConfig:MailConfig|undefined;
  try {
   const runtimeEnv=typeof process!=='undefined'?process.env:{};paymentMode=resolvePaymentMode(runtimeEnv);validateManufacturerStartup(runtimeEnv);
-  const manufacturerConfig=resolveManufacturerConfig(runtimeEnv);physicalActionsAllowed=Boolean(manufacturerConfig?.allowPhysicalActions);const manufacturerClient=manufacturerConfig?new ManufacturerHttpClient(manufacturerConfig):undefined;
+  const manufacturerConfig=resolveManufacturerConfig(runtimeEnv);physicalActionsAllowed=Boolean(manufacturerConfig?.allowPhysicalActions);mailConfig=dependencies.mailConfig??resolveMailer(runtimeEnv);const manufacturerClient=manufacturerConfig?new ManufacturerHttpClient(manufacturerConfig):undefined;
   manufacturerProvider=dependencies.manufacturerProvider??(manufacturerClient?new ManufacturerBatteryStationProvider(manufacturerClient):undefined);
-  manufacturerSync=manufacturerProvider?new ManufacturerSyncService(repository,manufacturerProvider,{onReturnDetected:(c,at)=>stripeCoordinator?stripeCoordinator.return(repository,c.rentalId,c.stationId,at,true):repository.transaction(d=>engine.return(d,c.rentalId,c.stationId,at,true))}):undefined;
+  manufacturerSync=manufacturerProvider?new ManufacturerSyncService(repository,manufacturerProvider,{onReturnDetected:async(c,at)=>{const closed=await(stripeCoordinator?stripeCoordinator.return(repository,c.rentalId,c.stationId,at,true):repository.transaction(d=>engine.return(d,c.rentalId,c.stationId,at,true)));if(mailConfig&&closed.state==='COMPLETED')await deliverNotices(repository,mailConfig.mailer,at,new Set([c.rentalId])).catch(()=>undefined);return closed;}}):undefined;
   // Only ever constructed on an explicit opt-in that validateManufacturerStartup has already found
   // coherent; without it the coordinator keeps its mock path and no rental can move real hardware.
   batteryEjector=dependencies.batteryEjector??(manufacturerClient&&manufacturerConfig?.allowPhysicalActions?new ManufacturerBatteryEjector(manufacturerClient,repository):undefined);
@@ -62,13 +65,27 @@ async function route(request:Request,path:string){
   const now=Date.now();
   const sync=manufacturerSync?await manufacturerSync.run({trigger:'SCHEDULED'}):null;
   await repository.transaction(d=>engine.refreshOverdue(d,now));
-  const candidates=(await repository.read()).rentals.filter(r=>overdueLossEligible(r,now));
+  // Warnings go out first, and a customer we hold an address for is never charged before one has
+  // really been delivered: the site promises to warn before any deposit is taken, and a failed send
+  // just postpones the capture to the next run instead of breaking that promise.
+  let notices={sent:0,failed:0};
+  if(mailConfig)notices=await deliverNotices(repository,mailConfig.mailer,now).catch(()=>({sent:0,failed:0}));
+  const snapshotForCapture=await repository.read();
+  const candidates=snapshotForCapture.rentals.filter(r=>overdueLossEligible(r,now)&&(!mailConfig||!r.contactEmail||warnedLongEnough(snapshotForCapture,r,now)));
+  const skippedUnwarned=snapshotForCapture.rentals.filter(r=>overdueLossEligible(r,now)).length-candidates.length;
   const losses:{rentalId:string;status:'captured'|'failed'}[]=[];
   for(const candidate of candidates){
    try{if(stripeCoordinator)await stripeCoordinator.captureOverdueLoss(repository,candidate.id,now);else await repository.transaction(d=>engine.markDepositLost(d,candidate.id,candidate.pricing.depositCents,undefined,now));losses.push({rentalId:candidate.id,status:'captured'});}
    catch{losses.push({rentalId:candidate.id,status:'failed'});}
   }
-  return reply({sync:sync?sync.status:'not_configured',overdue:losses.length,losses});
+  if(mailConfig)await deliverNotices(repository,mailConfig.mailer,now).then(r=>{notices={sent:notices.sent+r.sent,failed:notices.failed+r.failed};}).catch(()=>undefined);
+  let digest:'sent'|'nothing_to_report'|'failed'|'not_configured'='not_configured';
+  if(mailConfig?.opsEmail){
+   const plan=planOpsDigest(await repository.read(),now);
+   if(!plan)digest='nothing_to_report';
+   else digest=await mailConfig.mailer.send({to:mailConfig.opsEmail,...plan}).then(()=>'sent' as const,()=>'failed' as const);
+  }
+  return reply({sync:sync?sync.status:'not_configured',overdue:losses.length,losses,skippedUnwarned,notices,digest});
  }
  if(request.method==='POST'&&path==='internal/manufacturer/sync'){
   const expected=typeof process!=='undefined'?process.env.MANUFACTURER_SYNC_SECRET:undefined,provided=request.headers.get('authorization')?.replace(/^Bearer /,'');if(!expected||!provided||(await sha256(expected))!==(await sha256(provided)))throw new DomainError('Job de synchronisation non autorisé.',401);if(!manufacturerSync)throw new DomainError('Provider fabricant non configuré.',503);return reply({run:await manufacturerSync.run({trigger:'SCHEDULED'})});
@@ -143,7 +160,7 @@ async function route(request:Request,path:string){
  if(request.method==='GET'){
   const d=await repository.read();const actor=await actorFor(request,d);
   if(path==='health')return reply({status:'ok',demo:options.demo,providers:{payment:paymentMode,station:batteryEjector?'manufacturer':'mock',manufacturer:manufacturerProvider?'read_only':'not_configured'},manufacturerHealth:providerHealth(d),serverTime:Date.now()});
-  if(path==='public')return reply({stations:stationViews(d).filter(s=>!s.archivedAt),pricing:d.pricing[0],demo:options.demo,payment:paymentMode});
+  if(path==='public')return reply({stations:stationViews(d).filter(s=>!s.archivedAt),pricing:d.pricing[0],demo:options.demo,payment:paymentMode,emailEnabled:Boolean(mailConfig)});
   if(path.startsWith('translations/')){
    const config=displayConfigFor(d,path.split('/')[1]);
    return reply({locale:config.locale,translations:config.translations});
@@ -164,6 +181,18 @@ async function route(request:Request,path:string){
      if(!next.customerSessions.some(s=>s.id===digest))next.customerSessions.push({id:digest,customerId,expiresAt:Date.now()+CUSTOMER_LIFETIME_MS});
      engine.refreshOverdue(next);
     });
+   }
+   // A customer looking at an open rental is the best signal there is that a battery may just have
+   // come back. Until the manufacturer webhook is registered this is what keeps return detection
+   // close to real time instead of waiting for the nightly job. The staleness gate caps it at one
+   // cabinet read every ON_DEMAND_MIN_GAP_MS for the whole service, whoever is polling, so it cannot
+   // be turned into a way to hammer the supplier's API; a slow read never holds the page up.
+   if(manufacturerSync&&session){
+    const open=(await repository.read()),mine=open.rentals.find(r=>r.customerId===customerId&&['ACTIVE','OVERDUE'].includes(r.state));
+    // Attempts, not successes: with the cabinet unplugged every read fails, and a gate keyed on the
+    // last success would let every poll retry it.
+    const newest=Math.max(0,...open.manufacturerSyncRuns.map(run=>run.startedAt));
+    if(mine&&open.stationProviderLinks.some(l=>l.active)&&Date.now()-newest>=ON_DEMAND_MIN_GAP_MS)await Promise.race([manufacturerSync.run({trigger:'ON_DEMAND'}).catch(()=>undefined),new Promise(resolve=>setTimeout(resolve,5_000))]);
    }
    const fresh=await repository.read();
    const rs=fresh.rentals.filter(r=>r.customerId===customerId).sort((a,b)=>b.createdAt-a.createdAt);
@@ -281,6 +310,7 @@ async function route(request:Request,path:string){
   let result;
   if(stripeCoordinator){const prepared=await repository.transaction(d=>{const customerId=requireCustomer(d,digest);const stationRecord=d.stations.find(s=>s.publicId===input.stationPublicId);if(!stationRecord)throw new DomainError('Station introuvable.',404);rateLimit(d,`return-${customerId}`,12);engine.refreshOverdue(d);const rental=d.rentals.filter(r=>r.customerId===customerId).sort((a,b)=>b.createdAt-a.createdAt).find(r=>OPEN_STATES.includes(r.state));if(!rental)throw new DomainError('Aucune location active à restituer.',400);return {id:rental.id,stationId:stationRecord.id};});result=await stripeCoordinator.return(repository,prepared.id,prepared.stationId);}
   else result=await repository.transaction(d=>{const customerId=requireCustomer(d,digest);const stationRecord=d.stations.find(s=>s.publicId===input.stationPublicId);if(!stationRecord)throw new DomainError('Station introuvable.',404);rateLimit(d,`return-${customerId}`,12);engine.refreshOverdue(d);const rental=d.rentals.filter(r=>r.customerId===customerId).sort((a,b)=>b.createdAt-a.createdAt).find(r=>OPEN_STATES.includes(r.state));if(!rental)throw new DomainError('Aucune location active à restituer.',400);return engine.return(d,rental.id,stationRecord.id);});
+  if(mailConfig&&result.state==='COMPLETED')await deliverNotices(repository,mailConfig.mailer,Date.now(),new Set([result.id])).catch(()=>undefined);
   return reply({rental:customerRentalView(await repository.read(),result)},200,{'Set-Cookie':setCookie(request,'batyeo_customer',token,CUSTOMER_LIFETIME_MS/1000)});
  }
  if(path==='ticket'){

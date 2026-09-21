@@ -100,7 +100,7 @@ export function providerHealth(d:Data,now=Date.now(),freshForMs=15*60_000):{stat
 
 export class ManufacturerSyncService {
  constructor(private readonly repository:Repository,private readonly provider:ManufacturerReadProvider,private readonly options:{attempts?:number;baseDelayMs?:number;lockMs?:number;onReturnDetected?:(candidate:ReturnCandidate,now:number)=>Promise<unknown>;sleep?:(ms:number)=>Promise<void>;now?:()=>number;logger?:(entry:SyncLog)=>void}={}){}
- async run(input:{trigger:'SCHEDULED'|'MANUAL'|'WEBHOOK';requestedBy?:Actor|null;stationId?:string}){
+ async run(input:{trigger:'SCHEDULED'|'MANUAL'|'WEBHOOK'|'ON_DEMAND';requestedBy?:Actor|null;stationId?:string}){
   const now=this.options.now??Date.now,runId=crypto.randomUUID();const source=await this.repository.read();let links=source.stationProviderLinks.filter(link=>link.active&&(!input.stationId||link.stationId===input.stationId));
   // Backward-compatible read-only mappings created before the link registry existed.
   if(!links.length&&input.stationId){const station=source.stations.find(row=>row.id===input.stationId);if(station?.providerDeviceId)await this.repository.transaction(d=>{linkManufacturerStation(d,station.id,'BAJIE',station.providerDeviceId!,now());});links=(await this.repository.read()).stationProviderLinks.filter(link=>link.active&&link.stationId===input.stationId);}
