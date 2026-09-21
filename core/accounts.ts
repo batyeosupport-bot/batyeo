@@ -60,3 +60,40 @@ export function applyOwnPassword(d:Data,userId:string,expectedHash:string,newHas
  d.sessions=d.sessions.filter(s=>s.userId!==user.id||s.id===keepSessionDigest);
  const current=d.sessions.find(s=>s.id===keepSessionDigest);if(current)current.authVersion=user.authVersion;
 }
+
+/** Marks the addresses the demo seed creates. Nothing else in the project uses this domain. */
+export const DEMO_EMAIL_DOMAIN='@batyeo.demo';
+
+/**
+ * Turns an empty database into one a real operator can sign into: the pricing grid and a first
+ * SUPER_ADMIN, nothing else. Before this, the only way to populate a database was the demo seed,
+ * whose accounts and fixtures are not something to open to the public. Works on an empty database
+ * or on one holding only demo accounts (the staging case); refuses as soon as a real account
+ * exists, so it can never add a second owner to live data.
+ */
+export function bootstrapOperator(d:Data,input:{email:string;name:string},passwordHash:string,pricing:Data['pricing'][number]):User{
+ if(d.users.some(u=>!u.email.toLowerCase().endsWith(DEMO_EMAIL_DOMAIN)))throw new DomainError('Cette base contient déjà des comptes réels : l’amorçage est refusé.',409);
+ const email=input.email.trim().toLowerCase();
+ if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)||email.endsWith(DEMO_EMAIL_DOMAIN))throw new DomainError('Adresse email invalide pour un compte réel.',400);
+ if(input.name.trim().length<2)throw new DomainError('Nom invalide.',400);
+ const user:User={id:crypto.randomUUID(),email,name:input.name.trim(),role:'SUPER_ADMIN',partnerId:null,passwordHash,authVersion:0};
+ d.users.push(user);
+ if(!d.pricing.length)d.pricing.push(pricing);
+ return user;
+}
+
+/**
+ * Locks every demo account on a database that was seeded with the demo fixture, and drops their
+ * sessions. Only ever disables — the accounts stay in place because past audit rows point at them —
+ * and refuses to run unless at least one real, active SUPER_ADMIN exists, so it cannot be used to
+ * lock the operator out of their own database.
+ */
+export function retireDemoAccounts(d:Data,now=Date.now()):{retired:number} {
+ const hasRealOwner=d.users.some(u=>u.role==='SUPER_ADMIN'&&!u.email.toLowerCase().endsWith(DEMO_EMAIL_DOMAIN)&&u.disabledAt==null);
+ if(!hasRealOwner)throw new DomainError('Créez d’abord un vrai administrateur : sinon plus personne ne pourrait se connecter.',409);
+ let retired=0;
+ for(const u of d.users)if(u.email.toLowerCase().endsWith(DEMO_EMAIL_DOMAIN)&&u.disabledAt==null){u.disabledAt=now;retired++;}
+ const demoIds=new Set(d.users.filter(u=>u.email.toLowerCase().endsWith(DEMO_EMAIL_DOMAIN)).map(u=>u.id));
+ d.sessions=d.sessions.filter(s=>!demoIds.has(s.userId));
+ return {retired};
+}

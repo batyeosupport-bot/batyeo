@@ -19,6 +19,7 @@
     "postinstall": "prisma generate",
     "db:migrate": "prisma migrate deploy",
     "db:seed:demo": "node --import tsx scripts/postgres/seed.ts",
+    "db:bootstrap": "node --import tsx scripts/postgres/bootstrap.ts",
     "test:postgres": "node --import tsx --test tests/postgres.integration.ts",
     "manufacturer:check": "node --import tsx scripts/manufacturer-readonly-check.ts",
     "staging:doctor": "node --import tsx scripts/staging-doctor.ts",

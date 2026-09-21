@@ -3,6 +3,7 @@ import type {Actor,Data,ManufacturerName,ProviderHealth,ReconciliationKind,Stati
 import type {ManufacturerDeviceSnapshot} from './manufacturer';
 import {MANUFACTURER_OFFLINE_CODES,ManufacturerApiError,ManufacturerError} from './manufacturer';
 import {DomainError} from './providers';
+import {OPEN_STATES} from './rental';
 
 export interface ManufacturerReadProvider {getDeviceInfo(externalId:string):Promise<ManufacturerDeviceSnapshot>;}
 export interface SyncLog {level:'info'|'warn'|'error';event:string;stationId?:string;kind?:string;}
@@ -17,6 +18,31 @@ export function linkManufacturerStation(d:Data,stationId:string,manufacturer:Man
  if(link){link.active=true;link.updatedAt=now;}else {link={id:crypto.randomUUID(),stationId,manufacturer,externalId:normalized,active:true,createdAt:now,updatedAt:now};d.stationProviderLinks.push(link);}
  // Compatibility projection; provider links remain the durable extensible mapping.
  station.provider='manufacturer';station.providerDeviceId=normalized;return link;
+}
+
+/**
+ * Re-points an existing cabinet at another station. The database enforces one row per
+ * (manufacturer, externalId) even when inactive, so a second link can never be created: the
+ * existing row has to move. This is what makes it possible to take the real cabinet off the seeded
+ * demo station — which carries rental history that can never be deleted — and give it a fresh
+ * station of its own. Refused while either station has a rental in progress, because those rentals
+ * point at local slots that are about to stop describing this cabinet.
+ */
+export function moveManufacturerLink(d:Data,manufacturer:ManufacturerName,externalId:string,toStationId:string,now=Date.now()):{link:StationProviderLink;fromStationId:string} {
+ const link=d.stationProviderLinks.find(row=>row.manufacturer===manufacturer&&row.externalId===externalId.trim());
+ if(!link)throw new DomainError('Cette borne n’est associée à aucune station : utilisez « Associer ».',404);
+ const target=d.stations.find(s=>s.id===toStationId);if(!target)throw new DomainError('Station cible introuvable.',404);
+ const fromStationId=link.stationId,source=d.stations.find(s=>s.id===fromStationId);
+ if(fromStationId===toStationId&&link.active)return {link,fromStationId};
+ for(const id of new Set([fromStationId,toStationId]))if(d.rentals.some(r=>r.stationId===id&&OPEN_STATES.includes(r.state)))throw new DomainError('Des locations sont en cours sur l’une des deux stations : attendez leur clôture avant de déplacer la borne.',409);
+ for(const other of d.stationProviderLinks)if(other.id!==link.id&&other.stationId===toStationId&&other.manufacturer===manufacturer&&other.active){other.active=false;other.updatedAt=now;}
+ link.stationId=toStationId;link.active=true;link.updatedAt=now;
+ // Everything measured about the old station is stale for the new one; the next sync rebuilds it.
+ d.stationProviderSnapshots=d.stationProviderSnapshots.filter(row=>row.linkId!==link.id);
+ for(const record of d.reconciliationRecords)if(record.linkId===link.id&&record.status==='OPEN'){record.status='RESOLVED';record.resolvedAt=now;record.lastDetectedAt=now;}
+ if(source&&!d.stationProviderLinks.some(row=>row.stationId===source.id&&row.active)){source.provider='mock';source.providerDeviceId=null;source.providerStatus=null;source.providerLastSyncedAt=null;}
+ target.provider='manufacturer';target.providerDeviceId=link.externalId;target.providerStatus=null;target.providerLastSyncedAt=null;
+ return {link,fromStationId};
 }
 
 /** A battery BATYEO still shows as present is a normal, expected gap while our own rental for it

@@ -9,7 +9,7 @@ import {verifyStripeSignature,StripePaymentProvider,createTerminalConnectionToke
 import {StripeRentalCoordinator,type AsyncBatteryEjector} from '../core/stripe-coordinator';
 import {resolvePaymentMode,type PaymentMode} from '../core/payment-mode';
 import {ManufacturerBatteryEjector,ManufacturerBatteryStationProvider,ManufacturerHttpClient,reconcileManufacturerStation,resolveManufacturerConfig,validateManufacturerStartup} from '../core/manufacturer';
-import {ManufacturerSyncService,linkManufacturerStation} from '../core/manufacturer-sync';
+import {ManufacturerSyncService,linkManufacturerStation,moveManufacturerLink} from '../core/manufacturer-sync';
 import {MIN_PASSWORD_LENGTH,TEAM_ROLES,applyOwnPassword,createTeamMember,resetUserPassword,setUserDisabled} from '../core/accounts';
 import {providerHealth} from '../core/manufacturer-sync';
 import {partnerStatements} from '../core/statements';
@@ -354,6 +354,10 @@ async function route(request:Request,path:string){
   authorize(actor,'operate');
   const input=z.object({batteryId:id,action:z.enum(['MAINTENANCE','AVAILABLE']),stationId:id.optional()}).strict().parse(body);
   return reply(await write('operate',(d,current)=>{const battery=setBatteryService(d,input.batteryId,input.action,input.stationId);audit(d,current,`Batterie ${input.action==='MAINTENANCE'?'retirée du service':'remise en service'} · ${battery.id}`);return {battery};}));
+ }
+ if(path==='manufacturer/move-link'){
+  authorize(actor,'operate');const input=z.object({externalId:z.string().trim().min(1).max(150),toStationId:id,manufacturer:z.literal('BAJIE')}).strict().parse(body);
+  return reply(await write('operate',(d,current)=>{rateLimit(d,`manufacturer-move-${current.id}`,10);const target=d.stations.find(row=>row.id===input.toStationId);if(!target)throw new DomainError('Station cible introuvable.',404);assertTenant(current,target.partnerId);const existing=d.stationProviderLinks.find(row=>row.manufacturer===input.manufacturer&&row.externalId===input.externalId);const source=existing?d.stations.find(s=>s.id===existing.stationId):undefined;if(source)assertTenant(current,source.partnerId);const result=moveManufacturerLink(d,input.manufacturer,input.externalId,input.toStationId);audit(d,current,`Borne ${input.externalId} déplacée · ${source?.publicId??'?'} → ${target.publicId}`);return {link:result.link,fromStationId:result.fromStationId};}));
  }
  if(path==='manufacturer/adopt-inventory'){
   authorize(actor,'operate');const input=z.object({stationId:id}).strict().parse(body);

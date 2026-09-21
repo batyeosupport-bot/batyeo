@@ -4,7 +4,7 @@ import {emptyData,type Data} from '../core/types';
 import {seedData} from '../core/seed';
 import {validateData} from '../core/invariants';
 import {adoptProviderInventory,INVENTORY_SNAPSHOT_MAX_AGE_MS} from '../core/station-admin';
-import {linkManufacturerStation,ManufacturerSyncService} from '../core/manufacturer-sync';
+import {linkManufacturerStation,ManufacturerSyncService,moveManufacturerLink} from '../core/manufacturer-sync';
 import {setBatteryService} from '../core/station-admin';
 import {stationViews} from '../core/queries';
 import {MockBatteryStationProvider,PROVIDER_SNAPSHOT_FRESH_MS} from '../core/providers';
@@ -115,4 +115,26 @@ test('a lost battery that comes back, and a damaged one, can both be put right w
 
  const rented=d.rentals.find(r=>r.state==='ACTIVE')!;
  assert.throws(()=>setBatteryService(d,rented.batteryId!,'MAINTENANCE'),/en location/);
+});
+
+test('the real cabinet can leave the demo station for a fresh one — the only way to give it a clean local inventory',async()=>{
+ const d=seedData('x');
+ d.stations.push({id:'real',publicId:'bar-1',venueId:d.venues[0].id,partnerId:d.stations[0].partnerId,online:true,failure:'none',capacity:2});
+ d.slots.push({id:'r1',stationId:'real',position:1,batteryId:null},{id:'r2',stationId:'real',position:2,batteryId:null});
+ const link=linkManufacturerStation(d,'station-paris','BAJIE','DTA55480',1_000);
+ // Seeded demo rentals are still open: moving the cabinet under them would corrupt their bookkeeping.
+ assert.throws(()=>moveManufacturerLink(d,'BAJIE','DTA55480','real',2_000),/locations sont en cours/);
+ assert.equal(d.stationProviderLinks.find(l=>l.id===link.id)!.stationId,'station-paris','a refused move changes nothing');
+ for(const r of d.rentals)if(['ACTIVE','OVERDUE','EJECTION_FAILED'].includes(r.state))r.state='COMPLETED';
+ // Unlike seed data, a plain state flip is enough here: only the guard under test is exercised.
+ const result=moveManufacturerLink(d,'BAJIE','DTA55480','real',3_000);
+ assert.equal(result.fromStationId,'station-paris');
+ assert.equal(d.stationProviderLinks.filter(l=>l.externalId==='DTA55480').length,1,'one row per cabinet, exactly what the database unique index demands');
+ assert.equal(d.stationProviderLinks[0].stationId,'real');
+ const paris=d.stations.find(s=>s.id==='station-paris')!,real=d.stations.find(s=>s.id==='real')!;
+ assert.equal(paris.providerDeviceId??null,null);assert.equal(paris.provider,'mock','the demo station no longer claims a real cabinet');
+ assert.equal(real.providerDeviceId,'DTA55480');assert.equal(real.provider,'manufacturer');
+ assert.equal(d.stationProviderSnapshots.length,0,'stale measurements of the old station are dropped');
+ assert.throws(()=>moveManufacturerLink(d,'BAJIE','UNKNOWN','real'),/aucune station/);
+ assert.throws(()=>moveManufacturerLink(d,'BAJIE','DTA55480','nowhere'),/cible introuvable/);
 });
