@@ -1,7 +1,7 @@
 import {DomainError} from './providers';
 
-export interface StripeIntent {id:string;status:string;amount:number;amount_received?:number;metadata?:Record<string,string>;}
-export interface StripeRequest {method:'POST';path:string;body:Record<string,unknown>;idempotencyKey:string;}
+export interface StripeIntent {id:string;status:string;amount:number;amount_received?:number;amount_capturable?:number;client_secret?:string;metadata?:Record<string,string>;}
+export interface StripeRequest {method:'GET'|'POST';path:string;body:Record<string,unknown>;idempotencyKey:string;}
 export type StripeTransport=(request:StripeRequest)=>Promise<StripeIntent>;
 
 /** Stripe TEST boundary. The transport is injected so tests never contact Stripe. */
@@ -9,7 +9,12 @@ export type StripeTransport=(request:StripeRequest)=>Promise<StripeIntent>;
 const stripeKey=(key:string)=>!!key&&(key.startsWith('sk_test_')||key.startsWith('sk_live_'));
 export class StripePaymentProvider {
  constructor(private readonly secretKey:string,private readonly transport:StripeTransport=(request)=>defaultTransport(secretKey,request)){if(!stripeKey(secretKey))throw new DomainError('Clé Stripe absente ou invalide (sk_test_… ou sk_live_…).',503);}
- async authorize(rentalId:string,cents:number):Promise<StripeIntent>{if(!Number.isSafeInteger(cents)||cents<=0)throw new DomainError('Montant d’autorisation invalide.');return this.call('/payment_intents',{amount:cents,currency:'eur',capture_method:'manual',metadata:{rentalId,provider:'batyeo'}},`rental-${rentalId}-authorize`);}
+ /** Creates the intent the customer will put a card on. It holds nothing until the customer confirms it in the browser
+  * (Stripe.js, client secret): only then does it reach `requires_capture`. Card only, so Apple Pay and Google Pay come with it
+  * but no method that cannot hold a deposit is ever offered. */
+ async authorize(rentalId:string,cents:number):Promise<StripeIntent>{if(!Number.isSafeInteger(cents)||cents<=0)throw new DomainError('Montant d’autorisation invalide.');return this.call('/payment_intents',{amount:cents,currency:'eur',capture_method:'manual',payment_method_types:['card'],metadata:{rentalId,provider:'batyeo'}},`rental-${rentalId}-authorize`);}
+ /** Reads the intent's real state from Stripe. This is the only trustworthy source for "did the customer's card hold the deposit": the browser's own success message is never enough to start a rental. */
+ async retrieve(intentId:string):Promise<StripeIntent>{return this.transport({method:'GET',path:`/payment_intents/${encodeURIComponent(intentId)}`,body:{},idempotencyKey:''}).catch(error=>{if(error instanceof DomainError)throw error;throw new DomainError('Stripe est temporairement indisponible.',503);});}
  async capture(intentId:string,cents:number,rentalId:string):Promise<StripeIntent>{if(!Number.isSafeInteger(cents)||cents<0)throw new DomainError('Montant de capture invalide.');return this.call(`/payment_intents/${encodeURIComponent(intentId)}/capture`,{amount_to_capture:cents,metadata:{rentalId}},`rental-${rentalId}-capture-${cents}`);}
  /** Giving money back is the only correction available once a deposit is captured: a capture
   * cannot be undone, and without this an admin mistake or a battery found after a 48 h write-off
@@ -18,7 +23,15 @@ export class StripePaymentProvider {
  async release(intentId:string,rentalId:string):Promise<StripeIntent>{return this.call(`/payment_intents/${encodeURIComponent(intentId)}/cancel`,{},`rental-${rentalId}-release`);}
  private call(path:string,body:Record<string,unknown>,idempotencyKey:string){return this.transport({method:'POST',path,body,idempotencyKey}).catch(error=>{if(error instanceof DomainError)throw error;throw new DomainError('Stripe est temporairement indisponible.',503);});}
 }
-async function defaultTransport(secretKey:string,request:StripeRequest):Promise<StripeIntent>{const encoded=new URLSearchParams();for(const [key,value] of Object.entries(request.body)){if(typeof value==='object'&&value!==null)for(const [nested,nestedValue] of Object.entries(value))encoded.set(`${key}[${nested}]`,String(nestedValue));else encoded.set(key,String(value));}const response=await fetch(`https://api.stripe.com/v1${request.path}`,{method:'POST',headers:{Authorization:`Bearer ${secretKey}`,'Content-Type':'application/x-www-form-urlencoded','Idempotency-Key':request.idempotencyKey},body:encoded});const payload=await response.json() as StripeIntent & {error?:{message?:string}};if(!response.ok)throw new DomainError(payload.error?.message??'Stripe a refusé l’opération.',response.status===402?402:503);return payload;}
+async function defaultTransport(secretKey:string,request:StripeRequest):Promise<StripeIntent>{
+ const encoded=new URLSearchParams();
+ for(const [key,value] of Object.entries(request.body)){if(typeof value==='object'&&value!==null)for(const [nested,nestedValue] of Object.entries(value))encoded.set(`${key}[${nested}]`,String(nestedValue));else encoded.set(key,String(value));}
+ const read=request.method==='GET';
+ const response=await fetch(`https://api.stripe.com/v1${request.path}`,{method:request.method,headers:{Authorization:`Bearer ${secretKey}`,...(read?{}:{'Content-Type':'application/x-www-form-urlencoded','Idempotency-Key':request.idempotencyKey})},...(read?{}:{body:encoded})});
+ const payload=await response.json() as StripeIntent & {error?:{message?:string}};
+ if(!response.ok)throw new DomainError(payload.error?.message??'Stripe a refusé l’opération.',response.status===402?402:503);
+ return payload;
+}
 
 /**
  * A Terminal connection token is how the Stripe Terminal SDK running on the

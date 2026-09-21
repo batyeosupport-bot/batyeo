@@ -41,7 +41,7 @@ test('the refund route is reserved to BATYEO finance roles and calls Stripe befo
  const payment=d.payments.find(p=>p.rentalId===rentalId)!;payment.provider='stripe';payment.providerReference='pi_test_1';
  const repo=new MemoryRepository(d);
  const calls:{cents:number}[]=[];
- const stripeProvider={authorize:async()=>({id:'pi',status:'requires_capture',amount:0}),capture:async()=>({id:'pi',status:'succeeded',amount:0}),release:async()=>({id:'pi',status:'canceled',amount:0}),refund:async(_i:string,cents:number)=>{calls.push({cents});return {id:'re_1',status:'succeeded',amount:cents};}};
+ const stripeProvider={authorize:async()=>({id:'pi',status:'requires_capture',amount:0}),capture:async()=>({id:'pi',status:'succeeded',amount:0}),release:async()=>({id:'pi',status:'canceled',amount:0}),retrieve:async()=>({id:'pi',status:'requires_capture',amount:0}),refund:async(_i:string,cents:number)=>{calls.push({cents});return {id:'re_1',status:'succeeded',amount:cents};}};
  const previousProvider=process.env.PAYMENT_PROVIDER,previousKey=process.env.STRIPE_SECRET_KEY;
  process.env.PAYMENT_PROVIDER='stripe_test';process.env.STRIPE_SECRET_KEY='sk_test_refund';
  try{
@@ -61,7 +61,7 @@ test('a failing Stripe refund records nothing locally',async()=>{
  const {d,rentalId}=completed();
  const payment=d.payments.find(p=>p.rentalId===rentalId)!;payment.provider='stripe';payment.providerReference='pi_test_2';
  const repo=new MemoryRepository(d);
- const coordinator=new StripeRentalCoordinator({authorize:async()=>({id:'pi',status:'x',amount:0}),capture:async()=>({id:'pi',status:'x',amount:0}),release:async()=>({id:'pi',status:'x',amount:0}),refund:async()=>{throw new Error('Stripe down');}});
+ const coordinator=new StripeRentalCoordinator({authorize:async()=>({id:'pi',status:'x',amount:0}),capture:async()=>({id:'pi',status:'x',amount:0}),release:async()=>({id:'pi',status:'x',amount:0}),retrieve:async()=>({id:'pi',status:'x',amount:0}),refund:async()=>{throw new Error('Stripe down');}});
  await assert.rejects(coordinator.refund(repo,rentalId,100),/Stripe down/);
  assert.equal(repo.data.payments.find(p=>p.rentalId===rentalId)!.refundedCents??0,0);
 });
@@ -104,7 +104,7 @@ test('where money is real, a rental never starts on a bare PaymentIntent: no car
  const {StripeRentalCoordinator}=await import('../core/stripe-coordinator');
  const build=(status:string)=>{
   const calls:string[]=[];
-  const stripe={authorize:async()=>{calls.push('authorize');return {id:'pi_bare',status,amount:2000};},capture:async()=>{calls.push('capture');return {id:'pi_bare',status:'succeeded',amount:2000};},release:async()=>{calls.push('release');return {id:'pi_bare',status:'canceled',amount:0};},refund:async()=>({id:'re',status:'ok',amount:0})};
+  const stripe={authorize:async()=>{calls.push('authorize');return {id:'pi_bare',status,amount:2000};},capture:async()=>{calls.push('capture');return {id:'pi_bare',status:'succeeded',amount:2000};},release:async()=>{calls.push('release');return {id:'pi_bare',status:'canceled',amount:0};},retrieve:async()=>({id:'pi_bare',status,amount:2000}),refund:async()=>({id:'re',status:'ok',amount:0})};
   return {calls,stripe};
  };
  // Live: an intent that is not `requires_capture` holds nothing, so the rental must be refused and the intent cancelled.

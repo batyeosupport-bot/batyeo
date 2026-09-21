@@ -24,9 +24,11 @@ export interface AsyncBatteryEjector { ejectBatteryAsync(stationId:string):Promi
  * retries can never duplicate an authorization or capture. Stripe idempotency keys
  * make retries safe when the process loses the response.
  */
+/** A card that has not been confirmed after this long is abandoned: the rental expires and the customer is free to start again. */
+export const STALE_UNCONFIRMED_MS=15*60_000;
 export class StripeRentalCoordinator {
  private readonly engine:RentalEngine;
- constructor(private readonly payment:Pick<StripePaymentProvider,'authorize'|'capture'|'release'|'refund'>,private readonly station:BatteryStationProvider=new MockBatteryStationProvider(),private readonly ejector?:AsyncBatteryEjector,private readonly options:{requireConfirmedAuthorization?:boolean}={}){this.engine=new RentalEngine(undefined,station);}
+ constructor(private readonly payment:Pick<StripePaymentProvider,'authorize'|'capture'|'release'|'refund'|'retrieve'>,private readonly station:BatteryStationProvider=new MockBatteryStationProvider(),private readonly ejector?:AsyncBatteryEjector,private readonly options:{requireConfirmedAuthorization?:boolean}={}){this.engine=new RentalEngine(undefined,station);}
 
  async start(repository:Repository,customerId:string,stationId:string,key:string,now=Date.now(),contactEmail?:string):Promise<Rental>{
   const created=await repository.transaction(d=>this.engine.create(d,customerId,stationId,key,now,contactEmail));
@@ -43,32 +45,127 @@ export class StripeRentalCoordinator {
    await repository.transaction(d=>this.engine.markPaymentFailed(d,created.id,'Le paiement n’a pas été confirmé par la banque. Aucun montant n’est débité.','stripe',now));
    return (await repository.read()).rentals.find(r=>r.id===created.id)!;
   }
-  await repository.transaction(d=>this.engine.markPaymentAuthorized(d,created.id,created.pricing.depositCents,'stripe',intent.id,now));
+  return this.activate(repository,created,intent.id,now);
+ }
+
+ /**
+  * Step 1 of a card rental: create the rental and the Stripe intent the customer will put a card on,
+  * and hand back the client secret the browser needs. Nothing is authorized and no battery moves:
+  * the rental stays CREATED until `confirm` has read the intent back from Stripe. A replay (double
+  * tap, page reload, return from a 3-D Secure redirect) finds the same rental and the same intent.
+  */
+ async begin(repository:Repository,customerId:string,stationId:string,key:string,now=Date.now(),contactEmail?:string):Promise<{rental:Rental;clientSecret:string|null}>{
+  await this.expireStale(repository,now,STALE_UNCONFIRMED_MS,customerId);
+  const created=await repository.transaction(d=>this.engine.create(d,customerId,stationId,key,now,contactEmail));
+  if(created.state!=='CREATED')return {rental:created,clientSecret:null};
+  const existing=(await repository.read()).payments.find(p=>p.rentalId===created.id);
+  let intent:StripeIntent;
+  try{
+   if(existing?.providerReference)intent=await this.payment.retrieve(existing.providerReference);
+   else{
+    intent=await this.payment.authorize(created.id,created.pricing.depositCents);
+    await repository.transaction(d=>this.engine.attachIntent(d,created.id,intent.id,created.pricing.depositCents));
+   }
+  }catch(error){
+   const message=error instanceof Error?error.message:'Stripe authorization failed';
+   await repository.transaction(d=>this.engine.markPaymentFailed(d,created.id,message,'stripe',now));
+   return {rental:(await repository.read()).rentals.find(r=>r.id===created.id)!,clientSecret:null};
+  }
+  return {rental:(await repository.read()).rentals.find(r=>r.id===created.id)!,clientSecret:intent.client_secret??null};
+ }
+
+ /**
+  * Step 2: the browser says the card was accepted. That statement is worth nothing on its own — the
+  * intent is read back from Stripe and must genuinely hold this rental's exact deposit before a
+  * single battery is released. Anything short of that leaves the rental CREATED so the customer can
+  * try another card, and never charges or ejects anything.
+  */
+ async confirm(repository:Repository,customerId:string,rentalId:string,now=Date.now()):Promise<Rental>{
+  const snapshot=await repository.read();
+  const rental=snapshot.rentals.find(r=>r.id===rentalId&&r.customerId===customerId);
+  if(!rental)throw new DomainError('Location introuvable.',404);
+  if(rental.state!=='CREATED')return rental;
+  const payment=snapshot.payments.find(p=>p.rentalId===rental.id);
+  if(!payment?.providerReference)throw new DomainError('Aucun paiement à confirmer pour cette location.',409);
+  const intent=await this.payment.retrieve(payment.providerReference);
+  if(intent.metadata?.rentalId!==rental.id)throw new DomainError('Ce paiement ne correspond pas à cette location.',409);
+  if(intent.status==='canceled'){
+   await repository.transaction(d=>this.engine.markPaymentFailed(d,rental.id,'Le paiement a été annulé. Aucun montant n’est débité.','stripe',now));
+   return (await repository.read()).rentals.find(r=>r.id===rental.id)!;
+  }
+  if(intent.status!=='requires_capture')throw new DomainError('Le paiement n’est pas encore confirmé par la banque.',402);
+  if(intent.amount!==rental.pricing.depositCents||(intent.amount_capturable!==undefined&&intent.amount_capturable!==rental.pricing.depositCents))throw new DomainError('Le montant autorisé ne correspond pas à la caution.',409);
+  return this.activate(repository,rental,intent.id,now);
+ }
+
+ /** Cancels an intent, treating "already cancelled" as success: a retry after a half-finished expiry, or a cancellation Stripe already performed, must not leave the rental stuck open for ever. Reports whether the intent is now certainly cancelled. */
+ private async releaseIntent(intentId:string,rentalId:string):Promise<boolean>{
+  try{await this.payment.release(intentId,rentalId);return true;}
+  catch{try{return (await this.payment.retrieve(intentId)).status==='canceled';}catch{return false;}}
+ }
+
+ /** The customer changed their mind before paying. Same guarantee as expiry — the intent is cancelled first and only a rental that authorized nothing can be cancelled this way. */
+ async abandon(repository:Repository,customerId:string,rentalId:string,now=Date.now()):Promise<Rental>{
+  const snapshot=await repository.read();
+  const rental=snapshot.rentals.find(r=>r.id===rentalId&&r.customerId===customerId);
+  if(!rental)throw new DomainError('Location introuvable.',404);
+  if(rental.state!=='CREATED')return rental;
+  const payment=snapshot.payments.find(p=>p.rentalId===rental.id);
+  if(payment?.providerReference&&!await this.releaseIntent(payment.providerReference,rental.id))throw new DomainError('Le paiement n’a pas pu être annulé chez Stripe. Réessayez.',503);
+  return repository.transaction(d=>this.engine.expireUnconfirmed(d,rental.id,now,'CANCELLED'));
+ }
+
+ /**
+  * Frees customers whose card was never confirmed. Only rentals that authorized nothing are touched,
+  * and the Stripe intent is cancelled first so a card confirmed a moment too late cannot be charged
+  * for a rental that no longer exists. With a customer id it only looks at that customer's own.
+  */
+ async expireStale(repository:Repository,now=Date.now(),maxAgeMs=STALE_UNCONFIRMED_MS,customerId?:string):Promise<number>{
+  const stale=(await repository.read()).rentals.filter(r=>r.state==='CREATED'&&now-r.createdAt>=maxAgeMs&&(!customerId||r.customerId===customerId));
+  let expired=0;
+  for(const rental of stale){
+   const payment=(await repository.read()).payments.find(p=>p.rentalId===rental.id);
+   if(payment?.providerReference&&!await this.releaseIntent(payment.providerReference,rental.id))continue;
+   try{await repository.transaction(d=>this.engine.expireUnconfirmed(d,rental.id,now));expired++;}catch{/* moved on concurrently: nothing to expire */}
+  }
+  return expired;
+ }
+
+ /**
+  * Everything that happens once a deposit is really held: mark it authorized, then make the battery
+  * leave. It always works from the rental's own internal station id — never from whatever the caller
+  * typed, which for a customer is the public QR id. A real ejector looks its slot up by internal id:
+  * fed a public id it would find nothing *after* the battery had physically left, fail the rental
+  * and release a deposit the customer had earned the battery with.
+  */
+ private async activate(repository:Repository,rental:Rental,intentId:string,now:number):Promise<Rental>{
+  const stationId=rental.stationId;
+  await repository.transaction(d=>this.engine.markPaymentAuthorized(d,rental.id,rental.pricing.depositCents,'stripe',intentId,now));
   if(!this.ejector){
    // Mock/demo station: ejectBattery() is synchronous and Data-mutating, so begin+eject+activate
    // stay a single atomic transaction exactly as before — no network call is actually made here.
    try {
     const active=await repository.transaction(d=>{
-     const before=d.rentals.find(r=>r.id===created.id)!;
+     const before=d.rentals.find(r=>r.id===rental.id)!;
      if(before.state==='ACTIVE')return before;
-     const r=this.engine.beginEjection(d,created.id,now);const battery=this.station.ejectBattery(d,stationId);d.events.push({id:crypto.randomUUID(),rentalId:r.id,at:now,type:'BATTERY_EJECTED',detail:`Batterie ${battery} libérée`});return this.engine.activateWithBattery(d,r.id,battery,now);
+     const r=this.engine.beginEjection(d,rental.id,now);const battery=this.station.ejectBattery(d,stationId);d.events.push({id:crypto.randomUUID(),rentalId:r.id,at:now,type:'BATTERY_EJECTED',detail:`Batterie ${battery} libérée`});return this.engine.activateWithBattery(d,r.id,battery,now);
     });
     return active;
-   } catch(error) {return this.handleEjectionError(repository,created.id,intent.id,error,now);}
+   } catch(error) {return this.handleEjectionError(repository,rental.id,intentId,error,now);}
   }
   // A real ejector makes a network call, so beginEjection commits on its own first. If another
   // concurrent start() (client double-submit) already claimed the ejection, this call backs off
   // instead of calling beginEjection again — which would throw — or ejecting a second battery.
   const claim=await repository.transaction(d=>{
-   const before=d.rentals.find(r=>r.id===created.id)!;
+   const before=d.rentals.find(r=>r.id===rental.id)!;
    if(before.state!=='PAYMENT_AUTH')return false;
-   this.engine.beginEjection(d,created.id,now);return true;
+   this.engine.beginEjection(d,rental.id,now);return true;
   });
-  if(!claim)return (await repository.read()).rentals.find(r=>r.id===created.id)!;
+  if(!claim)return (await repository.read()).rentals.find(r=>r.id===rental.id)!;
   try {
    const battery=await this.ejector.ejectBatteryAsync(stationId);
    return await repository.transaction(d=>{
-    const r=d.rentals.find(r=>r.id===created.id)!;
+    const r=d.rentals.find(r=>r.id===rental.id)!;
     // ejectBatteryAsync only names which battery left; it has no Data access to remove it from
     // its slot itself, so that bookkeeping — exactly what the sync ejectBattery() does as a side
     // effect — happens here, before activateWithBattery, so nothing else can claim it meanwhile.
@@ -79,7 +176,7 @@ export class StripeRentalCoordinator {
     d.events.push({id:crypto.randomUUID(),rentalId:r.id,at:now,type:'BATTERY_EJECTED',detail:`Batterie ${battery} libérée`});
     return this.engine.activateWithBattery(d,r.id,battery,now);
    });
-  } catch(error) {return this.handleEjectionError(repository,created.id,intent.id,error,now);}
+  } catch(error) {return this.handleEjectionError(repository,rental.id,intentId,error,now);}
  }
 
  /**

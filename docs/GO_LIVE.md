@@ -1,14 +1,17 @@
 # Mise en service — checklist dans l'ordre
 
-> **BLOQUANT — à lire avant tout.** Le parcours client **ne collecte aucune carte bancaire**. Le
-> serveur crée un paiement Stripe mais rien ne permet au client d'y saisir sa carte : ni la page de
-> location (aucun formulaire), ni la borne (le lecteur de carte s'arrête volontairement avant de
-> débiter). En mode `stripe_live`, BATYEO **refuse donc désormais** toute location (« le paiement
-> n'a pas été confirmé ») plutôt que de donner une batterie sans caution. Tant que la collecte de
-> carte n'est pas construite, **le mode réel ne peut pas fonctionner**. Le mode `stripe_test` reste
-> une répétition : il laisse partir la location sans carte, et le dit sur chaque écran.
-> La solution recommandée : payer depuis le téléphone (Stripe Payment Element après le scan du QR,
-> Apple Pay / Google Pay inclus), ce qui rend le lecteur de carte de la borne inutile.
+> **Paiement par carte — construit le 2026-09-21.** Le client saisit sa carte **sur son téléphone**
+> après avoir scanné le QR (formulaire Stripe : carte, Apple Pay, Google Pay). BATYEO ne voit jamais
+> le numéro de carte. La location ne démarre, et la batterie ne sort, **qu'après** que le serveur a
+> relu chez Stripe que la caution est réellement bloquée (`requires_capture`, montant exact). Un
+> client qui n'a pas confirmé sa carte au bout de 15 minutes voit sa demande expirer, son blocage
+> annulé chez Stripe, et peut recommencer ailleurs. Le lecteur de carte de la borne n'est plus
+> nécessaire. En mode `stripe_test`, on paie avec la carte **4242 4242 4242 4242** (date future,
+> code au choix) : c'est une vraie répétition, avec le vrai formulaire.
+> Nouveau réglage obligatoire : `STRIPE_PUBLISHABLE_KEY` (voir la section 4).
+> **L'application mobile n'a pas été adaptée** : elle ne sait pas afficher le formulaire de carte.
+> Elle fonctionne en mode simulé (`mock`) uniquement ; en mode Stripe, la location doit se faire
+> depuis la page web.
 
 Tout ce qui peut être fait par le code l'est. Ce document liste ce qu'il reste à faire, dans l'ordre
 où le faire est sûr. Chaque étape dit ce qu'elle débloque. Ne saute pas d'étape : les dernières
@@ -63,7 +66,8 @@ regarde.
       `payment_intent.payment_failed`, **`charge.dispute.created`** et **`charge.refunded`**.
       Les deux derniers sont indispensables : sans eux, une contestation bancaire ou un
       remboursement fait depuis Stripe ne remonte pas dans BATYEO.
-- [ ] Noter la clé de signature (`whsec_…`) et la clé secrète **réelle** (`sk_live_…`).
+- [ ] Noter la clé de signature (`whsec_…`), la clé secrète **réelle** (`sk_live_…`) et la clé
+      **publique** (`pk_live_…`, Développeurs → Clés API).
 
 ## 3. Base de données de production
 
@@ -89,6 +93,7 @@ Projet → Settings → Environment Variables → environnement **Production**.
 | `DATABASE_URL` | base de production | — |
 | `PAYMENT_PROVIDER` | `stripe_live` | prend de vrais paiements |
 | `STRIPE_SECRET_KEY` | `sk_live_…` | doit correspondre au mode, sinon refus au démarrage |
+| `STRIPE_PUBLISHABLE_KEY` | `pk_live_…` (ou `pk_test_…` en test) | **obligatoire** : sert à afficher le formulaire de carte. Doit être du même environnement que la clé secrète, sinon le serveur refuse de démarrer |
 | `STRIPE_WEBHOOK_SECRET` | `whsec_…` | vérifie que Stripe est bien l'expéditeur |
 | `CRON_SECRET` | une longue chaîne aléatoire | protège la tâche de 3 h du matin |
 | `MANUFACTURER_PROVIDER` | `bajie` | — |
@@ -159,8 +164,10 @@ caisse tactile.
 
 Avec **ta propre carte**, sur la vraie borne :
 
-- [ ] Scanner le QR, louer, prendre la batterie : elle sort physiquement. *(Impossible en mode réel
-      tant que la collecte de carte n'existe pas — voir l'encadré en tête.)*
+- [ ] Scanner le QR, louer, **saisir ta carte** dans le formulaire, prendre la batterie : elle sort
+      physiquement seulement après validation de la carte.
+- [ ] Ferme la page **avant** de valider la carte : la location expire au bout de 15 minutes et le
+      blocage sur ta carte disparaît (vérifie dans Stripe que le paiement est « annulé »).
 - [ ] La rendre : la location se clôt, l'empreinte est libérée, seul le prix est encaissé.
 - [ ] Ouvrir la location dans l'admin : montants cohérents, contact client visible.
 - [ ] Te **rembourser** depuis le détail de la location, puis vérifier dans Stripe.

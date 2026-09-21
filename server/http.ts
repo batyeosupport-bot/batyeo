@@ -35,23 +35,28 @@ const id=z.string().min(1).max(100);
 const heartbeatSchema=z.object({runtimeVersion:z.string().min(1).max(50),configVersion:z.number().int().nonnegative().optional(),network:z.enum(['ONLINE','OFFLINE','DEGRADED']),appUptimeMs:z.number().int().nonnegative(),displayStatus:z.enum(['OK','ERROR','MAINTENANCE']),providerStatus:z.string().max(50).nullable(),lastCoreContactAt:z.number().int().nonnegative().nullable(),freeStorageBytes:z.number().int().nonnegative().nullable().optional(),localErrorCount:z.number().int().nonnegative().optional(),applicationHealth:z.enum(['OK','DEGRADED','ERROR']).optional(),errors:z.array(z.string().max(500)).max(20)});
 const reply=(body:unknown,status=200,headers:Record<string,string>={})=>Response.json(body,{status,headers:{'Cache-Control':'no-store','X-Content-Type-Options':'nosniff',...headers}});
 function audit(d:Data,a:Actor,action:string){d.audits.push({id:crypto.randomUUID(),userId:a.id,action,at:Date.now()});}
-export function createApi(repository:Repository,options:{demo:boolean;allowLegacyCredentials:boolean},dependencies:{mailConfig?:MailConfig;stripeProvider?:Pick<StripePaymentProvider,'authorize'|'capture'|'release'|'refund'>;manufacturerProvider?:Pick<ManufacturerBatteryStationProvider,'getDeviceInfo'|'listDevices'>;batteryEjector?:AsyncBatteryEjector;handleMediaUpload?:typeof handleUpload}={}) {
+export function createApi(repository:Repository,options:{demo:boolean;allowLegacyCredentials:boolean},dependencies:{mailConfig?:MailConfig;stripeProvider?:Pick<StripePaymentProvider,'authorize'|'capture'|'release'|'refund'|'retrieve'>;manufacturerProvider?:Pick<ManufacturerBatteryStationProvider,'getDeviceInfo'|'listDevices'>;batteryEjector?:AsyncBatteryEjector;handleMediaUpload?:typeof handleUpload}={}) {
  // A bad deployment config (a malformed key, an inconsistent flag combination) must surface as the
  // same clean {error, status} JSON as any other DomainError, not as an opaque empty 500: this used
  // to throw straight out of createApi(), before handle()'s try/catch even exists to catch it —
  // confirmed live on 2026-09-19 when a misconfigured STRIPE_SECRET_KEY produced exactly that empty
  // response instead of the "Stripe TEST nécessite STRIPE_SECRET_KEY." message it was throwing.
  let paymentMode:PaymentMode,manufacturerProvider:Pick<ManufacturerBatteryStationProvider,'getDeviceInfo'|'listDevices'>|undefined,manufacturerSync:ManufacturerSyncService|undefined,batteryEjector:AsyncBatteryEjector|undefined,stripeCoordinator:StripeRentalCoordinator|undefined;
- let startupError:unknown,physicalActionsAllowed=false,mailConfig:MailConfig|undefined;
+ let startupError:unknown,physicalActionsAllowed=false,mailConfig:MailConfig|undefined,publishableKey:string|undefined;
  try {
   const runtimeEnv=typeof process!=='undefined'?process.env:{};paymentMode=resolvePaymentMode(runtimeEnv);validateManufacturerStartup(runtimeEnv);
-  const manufacturerConfig=resolveManufacturerConfig(runtimeEnv);physicalActionsAllowed=Boolean(manufacturerConfig?.allowPhysicalActions);mailConfig=dependencies.mailConfig??resolveMailer(runtimeEnv);const manufacturerClient=manufacturerConfig?new ManufacturerHttpClient(manufacturerConfig):undefined;
+  const manufacturerConfig=resolveManufacturerConfig(runtimeEnv);physicalActionsAllowed=Boolean(manufacturerConfig?.allowPhysicalActions);
+  // The browser-side key that lets Stripe.js take the card. Its environment must match the secret key's:
+  // a live publishable key next to a test secret key (or the reverse) would create intents the browser
+  // can never confirm — or worse, put test cards against real money — so a mismatch stops the server.
+  const pk=(runtimeEnv as Record<string,string|undefined>).STRIPE_PUBLISHABLE_KEY?.trim();
+  if(paymentMode!=='mock'&&pk){const expectedPrefix=paymentMode==='stripe_live'?'pk_live_':'pk_test_';if(!pk.startsWith(expectedPrefix))throw new DomainError(`STRIPE_PUBLISHABLE_KEY doit commencer par ${expectedPrefix} pour le mode ${paymentMode}.`,503);publishableKey=pk;}mailConfig=dependencies.mailConfig??resolveMailer(runtimeEnv);const manufacturerClient=manufacturerConfig?new ManufacturerHttpClient(manufacturerConfig):undefined;
   manufacturerProvider=dependencies.manufacturerProvider??(manufacturerClient?new ManufacturerBatteryStationProvider(manufacturerClient):undefined);
   manufacturerSync=manufacturerProvider?new ManufacturerSyncService(repository,manufacturerProvider,{onReturnDetected:async(c,at)=>{const closed=await(stripeCoordinator?stripeCoordinator.return(repository,c.rentalId,c.stationId,at,true):repository.transaction(d=>engine.return(d,c.rentalId,c.stationId,at,true)));if(mailConfig&&closed.state==='COMPLETED')await deliverNotices(repository,mailConfig.mailer,at,new Set([c.rentalId])).catch(()=>undefined);return closed;}}):undefined;
   // Only ever constructed on an explicit opt-in that validateManufacturerStartup has already found
   // coherent; without it the coordinator keeps its mock path and no rental can move real hardware.
   batteryEjector=dependencies.batteryEjector??(manufacturerClient&&manufacturerConfig?.allowPhysicalActions?new ManufacturerBatteryEjector(manufacturerClient,repository):undefined);
-  stripeCoordinator=paymentMode==='stripe_test'||paymentMode==='stripe_live'?new StripeRentalCoordinator(dependencies.stripeProvider??new StripePaymentProvider(process.env.STRIPE_SECRET_KEY!),station,batteryEjector,{requireConfirmedAuthorization:paymentMode==='stripe_live'}):undefined;
+  stripeCoordinator=paymentMode==='stripe_test'||paymentMode==='stripe_live'?new StripeRentalCoordinator(dependencies.stripeProvider??new StripePaymentProvider(process.env.STRIPE_SECRET_KEY!),station,batteryEjector,{requireConfirmedAuthorization:true}):undefined;
  } catch(e) { startupError=e; }
 // A visitor looking at the site or at an open rental is the best signal that something may have
 // changed on a cabinet. Until the manufacturer webhook is registered this is what keeps offline
@@ -82,6 +87,7 @@ async function route(request:Request,path:string){
   // Warnings go out first, and a customer we hold an address for is never charged before one has
   // really been delivered: the site promises to warn before any deposit is taken, and a failed send
   // just postpones the capture to the next run instead of breaking that promise.
+  const expiredUnconfirmed=stripeCoordinator?await stripeCoordinator.expireStale(repository,now).catch(()=>0):0;
   let notices={sent:0,failed:0};
   if(mailConfig)notices=await deliverNotices(repository,mailConfig.mailer,now).catch(()=>({sent:0,failed:0}));
   const snapshotForCapture=await repository.read();
@@ -99,7 +105,7 @@ async function route(request:Request,path:string){
    if(!plan)digest='nothing_to_report';
    else digest=await mailConfig.mailer.send({to:mailConfig.opsEmail,...plan}).then(()=>'sent' as const,()=>'failed' as const);
   }
-  return reply({sync:sync?sync.status:'not_configured',overdue:losses.length,losses,skippedUnwarned,notices,digest});
+  return reply({sync:sync?sync.status:'not_configured',overdue:losses.length,losses,skippedUnwarned,expiredUnconfirmed,notices,digest});
  }
  if(request.method==='POST'&&path==='internal/manufacturer/sync'){
   const expected=typeof process!=='undefined'?process.env.MANUFACTURER_SYNC_SECRET:undefined,provided=request.headers.get('authorization')?.replace(/^Bearer /,'');if(!expected||!provided||(await sha256(expected))!==(await sha256(provided)))throw new DomainError('Job de synchronisation non autorisé.',401);if(!manufacturerSync)throw new DomainError('Provider fabricant non configuré.',503);return reply({run:await manufacturerSync.run({trigger:'SCHEDULED'})});
@@ -175,7 +181,7 @@ async function route(request:Request,path:string){
   const d=await repository.read();const actor=await actorFor(request,d);
   if(path==='health')return reply({status:'ok',demo:options.demo,providers:{payment:paymentMode,station:batteryEjector?'manufacturer':'mock',manufacturer:manufacturerProvider?'read_only':'not_configured'},manufacturerHealth:providerHealth(d),serverTime:Date.now()});
   if(path==='public'){await refreshFromCabinets(PUBLIC_REFRESH_MIN_GAP_MS);}
- if(path==='public')return reply({stations:stationViews(await repository.read()).filter(s=>!s.archivedAt),pricing:d.pricing[0],demo:options.demo,payment:paymentMode,emailEnabled:Boolean(mailConfig)});
+ if(path==='public')return reply({stations:stationViews(await repository.read()).filter(s=>!s.archivedAt),pricing:d.pricing[0],demo:options.demo,payment:paymentMode,emailEnabled:Boolean(mailConfig),cardPayments:Boolean(stripeCoordinator&&publishableKey)});
   if(path.startsWith('translations/')){
    const config=displayConfigFor(d,path.split('/')[1]);
    return reply({locale:config.locale,translations:config.translations});
@@ -264,7 +270,15 @@ async function route(request:Request,path:string){
   const input=z.object({stationPublicId:id,termsAccepted:z.literal(true),idempotencyKey:z.string().uuid(),contactEmail:z.string().trim().email().max(200).optional()}).strict().parse(body);
   const token=customerToken(request)??'';if(!token)throw new DomainError('Rechargez la page pour préparer votre session de location.',400);const digest=await sha256(token);
   let result;
-  if(stripeCoordinator){const customerId=await repository.transaction(d=>{const id=requireCustomer(d,digest);d.customerSessions.find(s=>s.id===digest)!.expiresAt=Date.now()+CUSTOMER_LIFETIME_MS;rateLimit(d,`start-${id}`,12);engine.refreshOverdue(d);return id;});result=await stripeCoordinator.start(repository,customerId,input.stationPublicId,input.idempotencyKey,Date.now(),input.contactEmail);}
+  if(stripeCoordinator){
+   // Card payments are two steps. This one creates the rental and the intent and returns what the browser
+   // needs to take the card; nothing is authorized and no battery moves until rental/confirm-payment has
+   // read the intent back from Stripe.
+   if(!publishableKey)throw new DomainError('Le paiement par carte n’est pas encore configuré sur ce serveur (STRIPE_PUBLISHABLE_KEY).',503);
+   const customerId=await repository.transaction(d=>{const id=requireCustomer(d,digest);d.customerSessions.find(s=>s.id===digest)!.expiresAt=Date.now()+CUSTOMER_LIFETIME_MS;rateLimit(d,`start-${id}`,12);engine.refreshOverdue(d);return id;});
+   const begun=await stripeCoordinator.begin(repository,customerId,input.stationPublicId,input.idempotencyKey,Date.now(),input.contactEmail);
+   return reply({rental:customerRentalView(await repository.read(),begun.rental),payment:begun.clientSecret?{clientSecret:begun.clientSecret,publishableKey}:null},200,{'Set-Cookie':setCookie(request,'batyeo_customer',token,CUSTOMER_LIFETIME_MS/1000)});
+  }
   else result=await repository.transaction(d=>{const customerId=requireCustomer(d,digest);d.customerSessions.find(s=>s.id===digest)!.expiresAt=Date.now()+CUSTOMER_LIFETIME_MS;rateLimit(d,`start-${customerId}`,12);engine.refreshOverdue(d);return engine.start(d,customerId,input.stationPublicId,input.idempotencyKey,Date.now(),input.contactEmail);});
   return reply({rental:customerRentalView(await repository.read(),result)},200,{'Set-Cookie':setCookie(request,'batyeo_customer',token,7*86400)});
  }
@@ -316,6 +330,22 @@ async function route(request:Request,path:string){
   else result=await repository.transaction(d=>{const customerId=requireCustomer(d,digest);const stationRecord=d.stations.find(s=>s.publicId===input.stationPublicId);if(!stationRecord)throw new DomainError('Station introuvable.',404);rateLimit(d,`return-${customerId}`,12);engine.refreshOverdue(d);const rental=d.rentals.filter(r=>r.customerId===customerId).sort((a,b)=>b.createdAt-a.createdAt).find(r=>OPEN_STATES.includes(r.state));if(!rental)throw new DomainError('Aucune location active à restituer.',400);return engine.return(d,rental.id,stationRecord.id);});
   if(mailConfig&&result.state==='COMPLETED')await deliverNotices(repository,mailConfig.mailer,Date.now(),new Set([result.id])).catch(()=>undefined);
   return reply({rental:customerRentalView(await repository.read(),result)},200,{'Set-Cookie':setCookie(request,'batyeo_customer',token,CUSTOMER_LIFETIME_MS/1000)});
+ }
+ if(path==='rental/confirm-payment'){
+  const input=z.object({rentalId:id}).strict().parse(body);
+  const token=customerToken(request)??'';if(!token)throw new DomainError('Session client manquante.',401);const digest=await sha256(token);
+  if(!stripeCoordinator)throw new DomainError('Aucun paiement par carte à confirmer.',409);
+  const customerId=await repository.transaction(d=>{const cid=requireCustomer(d,digest);rateLimit(d,`confirm-${cid}`,30);return cid;});
+  const rental=await stripeCoordinator.confirm(repository,customerId,input.rentalId);
+  return reply({rental:customerRentalView(await repository.read(),rental)});
+ }
+ if(path==='rental/cancel-unpaid'){
+  const input=z.object({rentalId:id}).strict().parse(body);
+  const token=customerToken(request)??'';if(!token)throw new DomainError('Session client manquante.',401);const digest=await sha256(token);
+  if(!stripeCoordinator)throw new DomainError('Aucun paiement par carte à annuler.',409);
+  const customerId=await repository.transaction(d=>{const cid=requireCustomer(d,digest);rateLimit(d,`cancel-${cid}`,30);return cid;});
+  const rental=await stripeCoordinator.abandon(repository,customerId,input.rentalId);
+  return reply({rental:customerRentalView(await repository.read(),rental)});
  }
  if(path==='ticket'){
   const input=z.object({email:z.string().email().max(200),subject:z.string().min(3).max(150),message:z.string().min(10).max(3000),rentalId:id.optional()}).strict().parse(body);

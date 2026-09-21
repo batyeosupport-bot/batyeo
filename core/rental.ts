@@ -36,7 +36,29 @@ export class RentalEngine {
   const r:Rental={id:crypto.randomUUID(),customerId,partnerId:s.partnerId,stationId:s.id,batteryId:null,returnStationId:null,state:'CREATED',paymentState:'PENDING',physicalState:'IDLE',createdAt:now,startedAt:null,returnedAt:null,deadline:null,pricing,amountCents:0,commissionCents:0,idempotencyKey:key,contactEmail:contactEmail?.trim().toLowerCase()||null,error:null,simulatedMinutes:0};
   d.rentals.push(r);d.terms.push({id:crypto.randomUUID(),rentalId:r.id,version:TERMS_VERSION,acceptedAt:now,customerId});this.event(d,r,'CREATED','Location créée · conditions acceptées',now);return r;
  }
- private recordAuthorized(d:Data,r:Rental,cents:number,provider:'mock'|'stripe'='mock',reference?:string){const existing=this.paymentFor(d,r);if(existing){if(existing.status==='AUTHORIZED'&&existing.authorizedCents===cents)return existing;throw new DomainError('Cette location possède déjà une autorisation de paiement.');}const p:Payment={id:`pay-${r.id}`,rentalId:r.id,authorizedCents:cents,capturedCents:0,releasedCents:0,status:'AUTHORIZED',provider,providerReference:reference??null,requestedCents:cents,error:null};d.payments.push(p);this.setPayment(r,'AUTHORIZED');return p;}
+ private recordAuthorized(d:Data,r:Rental,cents:number,provider:'mock'|'stripe'='mock',reference?:string){const existing=this.paymentFor(d,r);if(existing){if(existing.status==='AUTHORIZED'&&existing.authorizedCents===cents)return existing;
+  // The intent was attached before the customer confirmed their card (attachIntent): confirming is what turns it into a real authorization.
+  if(['PENDING','AUTHORIZING'].includes(existing.status)&&existing.authorizedCents===0){existing.authorizedCents=cents;existing.requestedCents=cents;existing.status='AUTHORIZED';existing.provider=provider;existing.providerReference=reference??existing.providerReference;existing.error=null;this.setPayment(r,'AUTHORIZED');return existing;}
+  throw new DomainError('Cette location possède déjà une autorisation de paiement.');}const p:Payment={id:`pay-${r.id}`,rentalId:r.id,authorizedCents:cents,capturedCents:0,releasedCents:0,status:'AUTHORIZED',provider,providerReference:reference??null,requestedCents:cents,error:null};d.payments.push(p);this.setPayment(r,'AUTHORIZED');return p;}
+ /** Records the Stripe intent created for this rental, before the customer has put a card on it. It authorizes nothing: the payment stays PENDING with a zero authorized amount until the intent is confirmed and read back from Stripe. Idempotent, so a replayed request cannot create a second record. */
+ attachIntent(d:Data,rentalId:string,intentId:string,cents:number):Payment {
+  const r=d.rentals.find(x=>x.id===rentalId);if(!r)throw new DomainError('Location introuvable.',404);
+  const existing=this.paymentFor(d,r);if(existing)return existing;
+  if(r.state!=='CREATED')throw new DomainError('Cette location ne peut plus recevoir de paiement.',409);
+  const p:Payment={id:`pay-${r.id}`,rentalId:r.id,authorizedCents:0,capturedCents:0,releasedCents:0,status:'PENDING',provider:'stripe',providerReference:intentId,requestedCents:cents,error:null};
+  d.payments.push(p);return p;
+ }
+ /** A rental whose customer never confirmed a card must not hold a customer hostage: while it stays open they cannot rent anywhere else. Only ever applies to a rental that has not authorized anything. */
+ expireUnconfirmed(d:Data,rentalId:string,now=Date.now(),to:'EXPIRED'|'CANCELLED'='EXPIRED'):Rental {
+  const r=d.rentals.find(x=>x.id===rentalId);if(!r)throw new DomainError('Location introuvable.',404);
+  if(r.state!=='CREATED')return r;
+  // The card can have been accepted by Stripe (its webhook may already have marked the payment AUTHORIZED) while the customer
+  // never came back to confirm. No ejection has started — the rental is still CREATED — so the hold is simply given back.
+  const p=this.paymentFor(d,r);
+  if(p){p.releasedCents=p.authorizedCents;p.status='RELEASED';}
+  this.setPayment(r,'RELEASED');this.move(d,r,to,to==='EXPIRED'?'Paiement jamais confirmé par le client · demande expirée':'Annulée par le client avant tout paiement',now);
+  return r;
+ }
  markPaymentAuthorized(d:Data,rentalId:string,cents:number,provider:'mock'|'stripe'='mock',reference?:string,now=Date.now()){const r=d.rentals.find(x=>x.id===rentalId);if(!r)throw new DomainError('Location introuvable.',404);if(['PAYMENT_AUTH','EJECTING','ACTIVE'].includes(r.state))return this.paymentFor(d,r)!;if(r.state!=='CREATED')throw new DomainError('La location ne peut plus être autorisée.');const p=this.recordAuthorized(d,r,cents,provider,reference);this.move(d,r,'PAYMENT_AUTH',`Autorisation ${provider==='stripe'?'Stripe':'simulée'} : ${cents} centimes`,now);return p;}
  markPaymentFailed(d:Data,rentalId:string,error:string,provider:'mock'|'stripe'='mock',now=Date.now()){const r=d.rentals.find(x=>x.id===rentalId);if(!r)throw new DomainError('Location introuvable.',404);const p=this.paymentFor(d,r)??{id:`pay-${r.id}`,rentalId:r.id,authorizedCents:0,capturedCents:0,releasedCents:0,status:'FAILED' as const,provider,providerReference:null,requestedCents:r.pricing.depositCents,error};if(!this.paymentFor(d,r))d.payments.push(p);p.status='FAILED';p.provider=provider;p.error=error;r.error=error;this.setPayment(r,'FAILED');if(r.state==='CREATED')this.move(d,r,'PAYMENT_FAILED',error,now);return p;}
  beginEjection(d:Data,rentalId:string,now=Date.now()){const r=d.rentals.find(x=>x.id===rentalId);if(!r)throw new DomainError('Location introuvable.',404);if(r.state==='ACTIVE')return r;if(r.state!=='PAYMENT_AUTH')throw new DomainError('Le paiement doit être autorisé avant l’éjection.');this.setPayment(r,'AUTHORIZED');r.physicalState='EJECTING';this.move(d,r,'EJECTING','Éjection demandée à la borne',now);return r;}
