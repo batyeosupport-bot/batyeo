@@ -81,8 +81,14 @@ regarde.
 À faire depuis ton terminal, dans le dossier du projet, avec l'adresse de la base **de production**
 (pas celle de staging).
 
-1. Appliquer les migrations (elles n'effacent rien) :
-   `DATABASE_URL="…" pnpm db:migrate`
+1. Appliquer les migrations (elles n'effacent rien). **Depuis le dossier du projet** (`cd
+   /Users/anismeslin/Developer/BATYEO`), en donnant **les deux** adresses et le projet visé :
+   `BATYEO_CONFIRM_DATABASE=<ref du projet> DATABASE_URL="<adresse>" DIRECT_DATABASE_URL="<adresse>" pnpm db:migrate`
+   Le schéma nomme deux adresses ; Prisma reprend celle qui manque dans `.env`, qui pointe la
+   **production**. La commande refuse donc de partir sans les deux et sans que tu retapes le projet
+   (le « ref » est la suite de lettres dans l'adresse Supabase : `db.<ref>.supabase.co`).
+   Sur Supabase, prends l'adresse « **Session pooler** » (Connect → Session pooler) : la connexion
+   « directe » n'est joignable qu'en IPv6 et échoue depuis beaucoup de réseaux.
 2. Créer ton vrai compte administrateur :
    `BATYEO_CONFIRM_DATABASE=<hôte de la base> DATABASE_URL="…" BATYEO_ADMIN_EMAIL=toi@… BATYEO_ADMIN_NAME="Ton nom" pnpm db:bootstrap`
    Le mot de passe temporaire s'affiche **une seule fois** : note-le, puis change-le dans

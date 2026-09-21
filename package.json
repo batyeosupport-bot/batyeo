@@ -17,7 +17,7 @@
     "test:integration": "node scripts/integration.mjs",
     "prisma:generate": "prisma generate",
     "postinstall": "prisma generate",
-    "db:migrate": "prisma migrate deploy",
+    "db:migrate": "node --import tsx scripts/postgres/migrate.ts",
     "db:seed:demo": "node --import tsx scripts/postgres/seed.ts",
     "db:bootstrap": "node --import tsx scripts/postgres/bootstrap.ts",
     "test:postgres": "node --import tsx --test tests/postgres.integration.ts",
