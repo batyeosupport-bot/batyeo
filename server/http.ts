@@ -745,6 +745,10 @@ async function route(request:Request,path:string){
 async function handle(request:Request,context:{params:Promise<{path:string[]}>}) {const path=(await context.params).path.join('/');try{return await route(request,path);}catch(e){if(e instanceof ZodError)return reply({error:e.issues[0]?.message==='Invalid literal value, expected true'?'Veuillez accepter les conditions.':'Vérifiez les informations saisies.',details:e.issues.map(i=>i.path.join('.'))},400);if(e instanceof DomainError)return reply({error:e.message},e.status);// Structured enough to find the failing route in a log stream without leaking anything to the
 // caller: the generic 503 below is all the client ever sees, and an opaque 503 with no context is
 // exactly what made the DATABASE_URL outage take so long to diagnose.
-console.error(JSON.stringify({event:'request_failed',method:request.method,path,name:e instanceof Error?e.name:'Unknown',message:e instanceof Error?e.message:'Unknown error'}));return reply({error:'Le service est temporairement indisponible. Réessayez dans un instant.'},503);}}
+console.error(JSON.stringify({event:'request_failed',method:request.method,path,name:e instanceof Error?e.name:'Unknown',message:e instanceof Error?e.message:'Unknown error'}));// The error's class and its short machine code (Prisma's P1001 "database unreachable", P2022 "column missing",
+// P1000 "bad credentials"…) — enough to tell an outage from a bug in seconds, and nothing that could leak a
+// secret: never the message, which is where connection strings and SQL end up.
+const code=(e as {code?:unknown}).code;
+return reply({error:'Le service est temporairement indisponible. Réessayez dans un instant.',diagnostic:{type:e instanceof Error?e.name:'Unknown',code:typeof code==='string'&&/^[A-Za-z0-9_]{2,16}$/.test(code)?code:undefined}},503);}}
 return {GET:handle,POST:handle};
 }
