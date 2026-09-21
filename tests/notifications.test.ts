@@ -127,3 +127,19 @@ test('an open rental page reads the cabinet at most every 30 s — even when the
  assert.equal(after.rental!.state,'COMPLETED','the page the customer is looking at shows their receipt, with no webhook and no nightly job');
  assert.equal(repo.data.rentals.find(r=>r.id===rental.id)!.returnStationId,'station-paris');
 });
+
+test('simply visiting the site notices an unplugged cabinet — at most once per 2 minutes for everyone — so it stops being sold without any webhook',async()=>{
+ const {linkManufacturerStation}=await import('../core/manufacturer-sync');
+ const {ManufacturerApiError}=await import('../core/manufacturer');
+ const d=seedData('x');linkManufacturerStation(d,'station-paris','BAJIE','DTA1',1_000);
+ const repo=new MemoryRepository(d);let reads=0;
+ const provider={listDevices:async()=>[],getDeviceInfo:async()=>{reads++;throw new ManufacturerApiError(2004,'Device not online.');}};
+ const visit=()=>createApi(repo,{demo:false,allowLegacyCredentials:false},{manufacturerProvider:provider}).GET(new Request('https://batyeo.test/api/core/public'),{params:Promise.resolve({path:['public']})}).then(r=>r.json() as Promise<{stations:{id:string;online:boolean}[]}>);
+ assert.equal((await (async()=>{const first=await visit();return first.stations.find(s=>s.id==='station-paris')!.online;})()),false,'the very first visitor already sees the truth');
+ const afterFirst=reads;
+ for(let i=0;i<10;i++)await visit();
+ assert.equal(reads,afterFirst,'ten more visitors trigger no further read inside the window');
+ for(const run of repo.data.manufacturerSyncRuns)run.startedAt-=3*60_000;
+ await visit();
+ assert.ok(reads>afterFirst,'once the window has passed, the next visitor refreshes again');
+});

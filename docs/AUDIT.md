@@ -197,10 +197,11 @@ comme réel.
 
 ## Reste à faire, et pourquoi je ne l'ai pas fait
 
-- **G. Envoi d'emails** — l'adresse est maintenant collectée et affichée, mais **rien n'est
-  envoyé** : cela demande un prestataire (Resend, Postmark, SES…), un domaine vérifié et une clé
-  API. Décision + identifiants côté utilisateur. Tant que ce n'est pas branché, la relance avant
-  débit de caution se fait à la main depuis le détail de la location.
+- **G. Envoi d'emails** — le code est **complet et testé** (reçu, avertissement avant débit,
+  avis de perte, résumé quotidien pour toi) mais reste **éteint** tant que `RESEND_API_KEY` et
+  `MAIL_FROM` sont absents ; la page de location ne demande alors aucune adresse. Il manque
+  uniquement un compte Resend (ou équivalent) et un domaine d'envoi vérifié. Règle appliquée :
+  un client dont on a l'adresse n'est jamais débité sans avertissement envoyé au moins 24 h avant.
 - **Validation juridique** — les deux pages légales décrivent fidèlement le service mais doivent
   être complétées (identité de l'exploitant, médiateur de la consommation, rétractation) et
   relues par un juriste avant tout encaissement réel.

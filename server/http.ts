@@ -28,7 +28,7 @@ import {handleUpload,type HandleUploadBody} from '@vercel/blob/client';
 const MEDIA_UPLOAD_LIMITS={IMAGE:{types:['image/jpeg','image/png','image/webp','image/gif'],maxBytes:15*1024*1024},VIDEO:{types:['video/mp4','video/webm','video/quicktime'],maxBytes:150*1024*1024}} as const;
 
 const engine=new RentalEngine();
-const ON_DEMAND_MIN_GAP_MS=30_000;
+const ON_DEMAND_MIN_GAP_MS=30_000,PUBLIC_REFRESH_MIN_GAP_MS=120_000;
 const station=new MockBatteryStationProvider();
 const id=z.string().min(1).max(100);
 /** Telemetry a station runtime reports; `stationId`/`runtimeId`/`at` are taken from the credential and the server clock, never from the body. */
@@ -53,6 +53,20 @@ export function createApi(repository:Repository,options:{demo:boolean;allowLegac
   batteryEjector=dependencies.batteryEjector??(manufacturerClient&&manufacturerConfig?.allowPhysicalActions?new ManufacturerBatteryEjector(manufacturerClient,repository):undefined);
   stripeCoordinator=paymentMode==='stripe_test'?new StripeRentalCoordinator(dependencies.stripeProvider??new StripePaymentProvider(process.env.STRIPE_SECRET_KEY!),station,batteryEjector):undefined;
  } catch(e) { startupError=e; }
+// A visitor looking at the site or at an open rental is the best signal that something may have
+// changed on a cabinet. Until the manufacturer webhook is registered this is what keeps offline
+// detection and return detection close to real time instead of waiting for the nightly job. The gate
+// counts *attempts*, not successes — with a cabinet unplugged every read fails, and a gate keyed on
+// the last success would let every visitor retry it — and is shared by the whole service, so it can
+// never become a way to hammer the supplier's API. A slow read never holds the page up.
+async function refreshFromCabinets(minGapMs:number){
+ if(!manufacturerSync)return;
+ const snapshot=await repository.read();
+ if(!snapshot.stationProviderLinks.some(link=>link.active))return;
+ const newest=Math.max(0,...snapshot.manufacturerSyncRuns.map(run=>run.startedAt));
+ if(Date.now()-newest<minGapMs)return;
+ await Promise.race([manufacturerSync.run({trigger:'ON_DEMAND'}).catch(()=>undefined),new Promise(resolve=>setTimeout(resolve,5_000))]);
+}
 async function route(request:Request,path:string){
  if(startupError)throw startupError;
  // Vercel Cron issues a plain GET and, when CRON_SECRET is set on the project, attaches it as a
@@ -160,7 +174,8 @@ async function route(request:Request,path:string){
  if(request.method==='GET'){
   const d=await repository.read();const actor=await actorFor(request,d);
   if(path==='health')return reply({status:'ok',demo:options.demo,providers:{payment:paymentMode,station:batteryEjector?'manufacturer':'mock',manufacturer:manufacturerProvider?'read_only':'not_configured'},manufacturerHealth:providerHealth(d),serverTime:Date.now()});
-  if(path==='public')return reply({stations:stationViews(d).filter(s=>!s.archivedAt),pricing:d.pricing[0],demo:options.demo,payment:paymentMode,emailEnabled:Boolean(mailConfig)});
+  if(path==='public'){await refreshFromCabinets(PUBLIC_REFRESH_MIN_GAP_MS);}
+ if(path==='public')return reply({stations:stationViews(await repository.read()).filter(s=>!s.archivedAt),pricing:d.pricing[0],demo:options.demo,payment:paymentMode,emailEnabled:Boolean(mailConfig)});
   if(path.startsWith('translations/')){
    const config=displayConfigFor(d,path.split('/')[1]);
    return reply({locale:config.locale,translations:config.translations});
@@ -182,18 +197,7 @@ async function route(request:Request,path:string){
      engine.refreshOverdue(next);
     });
    }
-   // A customer looking at an open rental is the best signal there is that a battery may just have
-   // come back. Until the manufacturer webhook is registered this is what keeps return detection
-   // close to real time instead of waiting for the nightly job. The staleness gate caps it at one
-   // cabinet read every ON_DEMAND_MIN_GAP_MS for the whole service, whoever is polling, so it cannot
-   // be turned into a way to hammer the supplier's API; a slow read never holds the page up.
-   if(manufacturerSync&&session){
-    const open=(await repository.read()),mine=open.rentals.find(r=>r.customerId===customerId&&['ACTIVE','OVERDUE'].includes(r.state));
-    // Attempts, not successes: with the cabinet unplugged every read fails, and a gate keyed on the
-    // last success would let every poll retry it.
-    const newest=Math.max(0,...open.manufacturerSyncRuns.map(run=>run.startedAt));
-    if(mine&&open.stationProviderLinks.some(l=>l.active)&&Date.now()-newest>=ON_DEMAND_MIN_GAP_MS)await Promise.race([manufacturerSync.run({trigger:'ON_DEMAND'}).catch(()=>undefined),new Promise(resolve=>setTimeout(resolve,5_000))]);
-   }
+   if(session&&d.rentals.some(r=>r.customerId===customerId&&['ACTIVE','OVERDUE'].includes(r.state)))await refreshFromCabinets(ON_DEMAND_MIN_GAP_MS);
    const fresh=await repository.read();
    const rs=fresh.rentals.filter(r=>r.customerId===customerId).sort((a,b)=>b.createdAt-a.createdAt);
    const current=rs.find(r=>OPEN_STATES.includes(r.state))??rs[0];
