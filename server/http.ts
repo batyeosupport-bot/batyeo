@@ -22,6 +22,7 @@ import {validateTranslations} from '../core/i18n';
 import type {Actor,Data,StationHeartbeatRecord} from '../core/types';
 import {createStation,createVenue,updateVenue,publicQrUrl,setStripeTerminalLocation,blockStationRentals,unblockStationRentals,archiveStation,restoreStation,relocateStation,setPartnerCommission,createPartner,adoptProviderInventory,setBatteryService} from '../core/station-admin';
 import {createMedia,setMediaStatus} from '../core/media-admin';
+import {purgeSettledWebhookEvents} from '../core/retention';
 import {COMMISSION_TIERS_BPS} from '../core/pricing';
 import {handleUpload,type HandleUploadBody} from '@vercel/blob/client';
 /** Media kinds accepted for the admin upload button, mapped to what Vercel Blob will actually accept for that kind. */
@@ -83,7 +84,8 @@ async function route(request:Request,path:string){
   if(!expected||!provided||(await sha256(expected))!==(await sha256(provided)))throw new DomainError('Tâche planifiée non autorisée.',401);
   const now=Date.now();
   const sync=manufacturerSync?await manufacturerSync.run({trigger:'SCHEDULED'}):null;
-  await repository.transaction(d=>engine.refreshOverdue(d,now));
+  let purgedWebhookEvents=0;
+  await repository.transaction(d=>{engine.refreshOverdue(d,now);purgedWebhookEvents=purgeSettledWebhookEvents(d,now);});
   // Warnings go out first, and a customer we hold an address for is never charged before one has
   // really been delivered: the site promises to warn before any deposit is taken, and a failed send
   // just postpones the capture to the next run instead of breaking that promise.
@@ -105,7 +107,7 @@ async function route(request:Request,path:string){
    if(!plan)digest='nothing_to_report';
    else digest=await mailConfig.mailer.send({to:mailConfig.opsEmail,...plan}).then(()=>'sent' as const,()=>'failed' as const);
   }
-  return reply({sync:sync?sync.status:'not_configured',overdue:losses.length,losses,skippedUnwarned,expiredUnconfirmed,notices,digest});
+  return reply({sync:sync?sync.status:'not_configured',overdue:losses.length,losses,skippedUnwarned,expiredUnconfirmed,notices,digest,purgedWebhookEvents});
  }
  if(request.method==='POST'&&path==='internal/manufacturer/sync'){
   const expected=typeof process!=='undefined'?process.env.MANUFACTURER_SYNC_SECRET:undefined,provided=request.headers.get('authorization')?.replace(/^Bearer /,'');if(!expected||!provided||(await sha256(expected))!==(await sha256(provided)))throw new DomainError('Job de synchronisation non autorisé.',401);if(!manufacturerSync)throw new DomainError('Provider fabricant non configuré.',503);return reply({run:await manufacturerSync.run({trigger:'SCHEDULED'})});
