@@ -16,6 +16,16 @@ async function sync<T extends {id:string}>(before:T[],after:T[],write:(row:T)=>P
  if(old.size&&remove)await remove([...old.keys()]);
  if(old.size&&!remove)throw new Error('Deleting durable domain records is not supported.');
 }
+/** Prisma raises P2034 only from its own engine. Through a driver adapter the real PostgreSQL
+ * SQLSTATE arrives wrapped in P2010 instead — 40001 (serialization failure) under Serializable,
+ * 40P01 (deadlock). Matching only P2034 made the retry loop below dead code against an actual
+ * database: two simultaneous writes surfaced a 500 rather than being replayed. */
+function retryableConflict(error:unknown):boolean{
+ if(!(error instanceof Prisma.PrismaClientKnownRequestError))return false;
+ if(error.code==='P2034')return true;
+ const cause=(error.meta as {driverAdapterError?:{cause?:{originalCode?:string;kind?:string}}}|undefined)?.driverAdapterError?.cause;
+ return cause?.kind==='TransactionWriteConflict'||cause?.originalCode==='40001'||cause?.originalCode==='40P01';
+}
 /** Normalized PostgreSQL adapter. No automatic demo seed, no fallback to SQLite.
  * Serializes snapshot writes at a database row; serializable conflicts are retried.
  * The lock is process-independent and preserves all existing domain invariants. */
@@ -104,7 +114,7 @@ export class PrismaRepository implements Repository {
     return value;
    },{isolationLevel:Prisma.TransactionIsolationLevel.Serializable,maxWait:10_000,timeout:30_000});
   }catch(error){
-   if(!(error instanceof Prisma.PrismaClientKnownRequestError)||error.code!=='P2034')throw error;
+   if(!retryableConflict(error))throw error;
    if(attempt<4)await new Promise(resolve=>setTimeout(resolve,10*(attempt+1)));
   }
   throw new DomainError('Une opération concurrente est en cours. Réessayez.',409);
