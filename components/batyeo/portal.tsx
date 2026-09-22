@@ -20,7 +20,11 @@ import {fr} from 'date-fns/locale';
 import type {DateRange} from 'react-day-picker';
 import {euro,COMMISSION_TIERS_BPS} from '@/core/pricing';
 import type {Role} from '@/core/types';
-import {RUNTIME_STRING_KEYS,WEB_STRING_KEYS} from '@/core/i18n';
+import {KIOSK_STRING_KEYS,RUNTIME_STRING_KEYS,WEB_STRING_KEYS} from '@/core/i18n';
+/** One tab per surface the operator recognises. The cabinet screen is two implementations — the
+ *  browser page running on the cabinets today and the Android app that will replace it — but that
+ *  is our problem, not theirs, so both key sets are filled from the same tab. */
+const KIOSK_TAB_KEYS:readonly string[]=[...KIOSK_STRING_KEYS,...RUNTIME_STRING_KEYS];
 /** One place decides how the portal talks about money, instead of a dozen fixed "mock"/"démo"
  * labels that kept calling a real deployment a demonstration. */
 const moneyWords=(payment:Dashboard['payment'])=>payment==='stripe_live'
@@ -377,7 +381,7 @@ function TranslationsEditor({data,refresh}:{data:Dashboard;refresh:()=>Promise<v
  const [busy,setBusy]=useState(false);
  const [newLocale,setNewLocale]=useState({code:'',label:'',locale:''});
  const [surface,setSurface]=useState<'kiosk'|'web'>('kiosk');
- const keys:readonly string[]=surface==='kiosk'?RUNTIME_STRING_KEYS:WEB_STRING_KEYS;
+ const keys:readonly string[]=surface==='kiosk'?KIOSK_TAB_KEYS:WEB_STRING_KEYS;
  const dictionary=strings[active]??{};
  const translated=keys.filter(key=>dictionary[key]?.trim()).length;
  const visibleKeys=keys.filter(key=>!onlyMissing||!dictionary[key]?.trim());
@@ -393,7 +397,7 @@ function TranslationsEditor({data,refresh}:{data:Dashboard;refresh:()=>Promise<v
   await api('display/translations',{stationIds:stations,defaultLocale,available:locales,strings});
   await refresh();toast.success(`Traductions publiées sur ${stations.length} borne${stations.length>1?'s':''}.`);
  }catch(e){toast.error(e instanceof Error?e.message:'Publication impossible.');}finally{setBusy(false);}}
- return <section className="panel"><PanelTitle title="Langues" subtitle={surface==='kiosk'?`${RUNTIME_STRING_KEYS.length} textes couvrent tous les écrans de la borne : accueil, tarifs, paiement carte, éjection, retour, reçu et erreurs`:`${WEB_STRING_KEYS.length} textes couvrent le parcours web (page /rent). Le français fonctionne toujours, même sans aucune traduction publiée ici.`} action={
+ return <section className="panel"><PanelTitle title="Langues" subtitle={surface==='kiosk'?`${KIOSK_TAB_KEYS.length} textes couvrent tous les écrans de la borne : accueil, tarifs, paiement carte, éjection, retour, reçu et erreurs. Les ${KIOSK_STRING_KEYS.length} premiers suffisent à l’écran affiché aujourd’hui, et le français fonctionne toujours, même sans traduction`:`${WEB_STRING_KEYS.length} textes couvrent le parcours web (page /rent). Le français fonctionne toujours, même sans aucune traduction publiée ici.`} action={
   <Dialog><DialogTrigger asChild><Button variant="outline">Ajouter une langue</Button></DialogTrigger><DialogContent>
    <DialogHeader><DialogTitle>Nouvelle langue</DialogTitle><DialogDescription>La borne et le site proposeront cette langue aux clients une fois les textes publiés.</DialogDescription></DialogHeader>
    <label className="field-label">Code<Input value={newLocale.code} maxLength={10} onChange={e=>setNewLocale({...newLocale,code:e.target.value})} placeholder="en"/></label>
@@ -416,7 +420,7 @@ function TranslationsEditor({data,refresh}:{data:Dashboard;refresh:()=>Promise<v
    {!visibleKeys.length&&<Empty>Tous les textes de cette langue sont traduits.</Empty>}
   </div>
   <label className="field-label">Bornes concernées<Picker label="Bornes concernées" value={targets.length?targets[0]:'all'} onChange={v=>setTargets(v==='all'?[]:[v])} options={[{value:'all',label:`Toutes les bornes (${data.stations.length})`},...data.stations.map(s=>({value:s.id,label:`${s.venue.name} · ${s.publicId}`}))]}/></label>
-  <Button className="cta" disabled={busy||!data.stations.length||![...RUNTIME_STRING_KEYS,...WEB_STRING_KEYS].filter(k=>strings[defaultLocale]?.[k]?.trim()).length} onClick={()=>void publish()}>{busy&&<Busy/>}Publier sur {stations.length} borne{stations.length>1?'s':''}</Button>
+  <Button className="cta" disabled={busy||!data.stations.length||![...KIOSK_TAB_KEYS,...WEB_STRING_KEYS].filter(k=>strings[defaultLocale]?.[k]?.trim()).length} onClick={()=>void publish()}>{busy&&<Busy/>}Publier sur {stations.length} borne{stations.length>1?'s':''}</Button>
  </section>;
 }
 /**

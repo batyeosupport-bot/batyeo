@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {validateTranslations,missingStringKeys,resolveStrings,RUNTIME_STRING_KEYS,MAX_RUNTIME_LOCALES,WEB_STRING_KEYS,WEB_DEFAULT_STRINGS_FR,missingWebStringKeys,resolveWebStrings,type RuntimeTranslations} from '../core/i18n';
+import {validateTranslations,missingStringKeys,resolveStrings,RUNTIME_STRING_KEYS,MAX_RUNTIME_LOCALES,WEB_STRING_KEYS,WEB_DEFAULT_STRINGS_FR,missingWebStringKeys,resolveWebStrings,KIOSK_STRING_KEYS,KIOSK_DEFAULT_STRINGS_FR,missingKioskStringKeys,resolveKioskStrings,type RuntimeTranslations} from '../core/i18n';
 
 function pack(overrides:Partial<RuntimeTranslations>={}):RuntimeTranslations {
  return {
@@ -109,4 +109,26 @@ test('the rare rental screens (failed, returning, under review, cancelled/expire
  const resolved=resolveWebStrings(english,'en-US');
  assert.equal(resolved.web_lost_title,'Your deposit\nwas charged.');
  assert.equal(resolved.web_lost_eyebrow,'BATTERIE JAMAIS RESTITUÉE','an untranslated key falls back to the French baseline on the page that bills a lost battery');
+});
+
+// The browser kiosk page is what the cabinets actually run (the APK has never been compiled), so it
+// must render fully in French on a station nobody has ever configured, and never show a raw key.
+test('the kiosk screen renders in French with no configured translations at all',()=>{
+ assert.deepEqual(resolveKioskStrings(null,'fr-FR'),KIOSK_DEFAULT_STRINGS_FR);
+ assert.deepEqual(resolveKioskStrings(null,'de-DE'),KIOSK_DEFAULT_STRINGS_FR);
+ for(const key of KIOSK_STRING_KEYS)assert.ok(KIOSK_DEFAULT_STRINGS_FR[key]?.trim(),`${key} has no French baseline`);
+});
+
+test('a partially translated kiosk locale falls back per key rather than per screen',()=>{
+ const translations:RuntimeTranslations={defaultLocale:'fr-FR',available:[{code:'fr',label:'Français',locale:'fr-FR'},{code:'en',label:'English',locale:'en-US'}],strings:{'fr-FR':{},'en-US':{kiosk_scanToRent:'Scan to rent'}}};
+ const resolved=resolveKioskStrings(translations,'en-US');
+ assert.equal(resolved.kiosk_scanToRent,'Scan to rent');
+ assert.equal(resolved.kiosk_step1,'1 · Scannez le code');
+ assert.deepEqual(missingKioskStringKeys(translations,'fr-FR'),[]);
+ assert.equal(missingKioskStringKeys(translations,'en-US').length,KIOSK_STRING_KEYS.length-1);
+});
+
+test('kiosk and runtime key sets stay disjoint so one tab never overwrites the other',()=>{
+ const runtime=new Set<string>(RUNTIME_STRING_KEYS);
+ for(const key of KIOSK_STRING_KEYS)assert.equal(runtime.has(key),false,`${key} collides with a runtime key`);
 });

@@ -72,6 +72,37 @@ export const WEB_DEFAULT_STRINGS_FR:Readonly<Record<WebStringKey,string>>={
  web_mode_bannerMock:'MODE DÉMO · AUCUN PAIEMENT RÉEL', web_mode_bannerTest:'MODE TEST · CARTE DE TEST UNIQUEMENT', web_intro_securityNoteTest:'Paiement Stripe en mode test. Aucun montant réel n’est débité.', web_intro_securityNoteLive:'Paiement sécurisé par Stripe. La caution est une empreinte, débitée seulement en cas de non-restitution.', web_intro_acceptSuffixLive:' et l’empreinte bancaire de {amount}.', web_receipt_noteTest:'Reçu de test. Aucun débit bancaire réel.', web_receipt_noteLive:'Un justificatif vous est également accessible depuis cette page.',
  web_pay_eyebrow:'DERNIÈRE ÉTAPE', web_pay_title:'Autorisez\nla caution.', web_pay_body:'Une empreinte de {amount} est prise sur votre carte. Rien n’est débité : elle est libérée à la restitution, hors prix de la location.', web_pay_loading:'Chargement du paiement sécurisé…', web_pay_cta:'AUTORISER ET PRENDRE LA BATTERIE', web_pay_confirming:'Vérification de votre paiement…', web_pay_failed:'Le paiement a échoué. Vérifiez votre carte ou essayez-en une autre.', web_pay_cancel:'Annuler', web_pay_testHint:'Mode test : utilisez la carte 4242 4242 4242 4242, une date future et un code au choix.',
 };
+/**
+ * Copy for the kiosk screen served in a browser (app/kiosk/[publicId]/page.tsx) — a third inventory,
+ * separate again from RUNTIME_STRING_KEYS. The Android runtime and this page show the same cabinet but
+ * share almost no strings: the runtime drives a card terminal and its own rental flow, whereas this
+ * screen only ever displays a price and a QR code the customer scans with their own phone.
+ *
+ * Like the web flow and unlike the runtime, French is built in: this screen is the fallback the
+ * cabinets actually run today (the APK has never been compiled), so it must never degrade to raw key
+ * names when a station has no admin-configured translations.
+ */
+export const KIOSK_STRING_KEYS=['kiosk_loading','kiosk_connectionLost','kiosk_stationNotFound','kiosk_scanToRent','kiosk_online','kiosk_offline','kiosk_available','kiosk_allRented','kiosk_price','kiosk_deposit','kiosk_step1','kiosk_step2','kiosk_step3','kiosk_step4','kiosk_unavailable','kiosk_scanInstructions'] as const;
+export type KioskStringKey=typeof KIOSK_STRING_KEYS[number];
+export const KIOSK_DEFAULT_STRINGS_FR:Readonly<Record<KioskStringKey,string>>={
+ kiosk_loading:'Chargement…',kiosk_connectionLost:'Connexion indisponible. Nouvelle tentative dans 15 s.',kiosk_stationNotFound:'Station « {publicId} » introuvable.',
+ kiosk_scanToRent:'Scannez pour louer',kiosk_online:'En ligne',kiosk_offline:'Hors ligne',
+ kiosk_available:'{count} batterie{plural} disponible{plural}',kiosk_allRented:'Toutes les batteries sont en cours de location',
+ kiosk_price:'{hourly} / heure commencée · maximum {cap}',kiosk_deposit:'Caution {deposit}, libérée au retour',
+ kiosk_step1:'1 · Scannez le code',kiosk_step2:'2 · Payez la caution',kiosk_step3:'3 · Prenez la batterie',kiosk_step4:'4 · Rendez-la dans n’importe quelle borne',
+ kiosk_unavailable:'Cette borne est momentanément indisponible. Une autre borne BATYEO est peut-être proche de vous.',
+ kiosk_scanInstructions:'Scannez avec l’appareil photo de votre téléphone',
+};
+/** Keys a locale still owes for the kiosk screen — French excluded, it has the built-in baseline. */
+export function missingKioskStringKeys(translations:RuntimeTranslations,locale:string):KioskStringKey[]{
+ if(locale==='fr-FR')return [];
+ const dictionary=translations.strings[locale]??{};
+ return KIOSK_STRING_KEYS.filter(key=>!dictionary[key]?.trim());
+}
+/** French baseline overlaid with whatever an admin translated, mirroring resolveWebStrings. */
+export function resolveKioskStrings(translations:RuntimeTranslations|null,locale:string):Record<KioskStringKey,string>{
+ return {...KIOSK_DEFAULT_STRINGS_FR,...(translations?.strings[locale]??{})};
+}
 /** Keys a locale still owes for the web flow, mirroring missingStringKeys — never includes French, which always has the built-in baseline. */
 export function missingWebStringKeys(translations:RuntimeTranslations,locale:string):WebStringKey[]{
  if(locale==='fr-FR')return [];

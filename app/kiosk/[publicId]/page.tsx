@@ -3,9 +3,12 @@ import {use, useEffect, useState} from 'react';
 import {QRCodeSVG} from 'qrcode.react';
 import {useApi, type PublicData} from '@/components/batyeo/shared';
 import {euro} from '@/core/pricing';
+import {resolveKioskStrings, type KioskStringKey, type RuntimeTranslations} from '@/core/i18n';
 
 /** How long the price/QR screen shows before the promotional carousel takes over, when media exists. */
 const INFO_SLIDE_MS = 20_000;
+/** Nobody touches this screen, so the languages take turns instead of waiting for a tap. */
+const LOCALE_ROTATION_MS = 10_000;
 
 interface KioskMediaItem {id: string; kind: 'IMAGE' | 'VIDEO'; uri: string; durationMs: number}
 interface KioskDisplayConfig {venueName: string; idleContent: string; maintenanceBanner: string | null; refreshIntervalMs: number; playlist: KioskMediaItem[]}
@@ -21,8 +24,25 @@ export default function KioskPage({params}: {params: Promise<{publicId: string}>
  const {publicId} = use(params);
  const {data, error, loading} = useApi<PublicData>('public', 15000);
  const {data: display} = useApi<KioskDisplayConfig>('display/' + publicId, 20000);
+ const {data: translationData} = useApi<{locale: string; translations: RuntimeTranslations | null}>('translations/' + publicId);
  const station = data?.stations.find(s => s.publicId === publicId);
  const qrTarget = typeof window !== 'undefined' ? `${window.location.origin}/rent/${encodeURIComponent(publicId)}` : `/rent/${encodeURIComponent(publicId)}`;
+
+ // A station with no configured translations keeps exactly one locale — the rotation below is then inert.
+ const translations = translationData?.translations ?? null;
+ const locales = translations?.available.length ? translations.available.map(l => l.locale) : [translationData?.locale ?? 'fr-FR'];
+ const [localeIndex, setLocaleIndex] = useState(0);
+ useEffect(() => {
+  if (locales.length < 2) return;
+  const timer = setInterval(() => setLocaleIndex(prev => (prev + 1) % locales.length), LOCALE_ROTATION_MS);
+  return () => clearInterval(timer);
+ }, [locales.length]);
+ const strings = resolveKioskStrings(translations, locales[localeIndex % locales.length]);
+ const t = (key: KioskStringKey, vars?: Record<string, string>) => {
+  let value = strings[key];
+  if (vars) for (const [name, replacement] of Object.entries(vars)) value = value.replaceAll(`{${name}}`, replacement);
+  return value;
+ };
 
  // -1 = the price/QR screen; 0..n-1 = an index into the promotional playlist.
  const [slide, setSlide] = useState(-1);
@@ -41,15 +61,15 @@ export default function KioskPage({params}: {params: Promise<{publicId: string}>
   <main style={styles.screen}>
    <style>{KIOSK_CSS}</style>
    {display?.maintenanceBanner && <div style={styles.banner}>{display.maintenanceBanner}</div>}
-   {loading && <p style={styles.status}>Chargement…</p>}
-   {!loading && error && <p style={styles.error}>Connexion indisponible. Nouvelle tentative dans 15 s.</p>}
-   {!loading && !error && !station && <p style={styles.error}>Station « {publicId} » introuvable.</p>}
+   {loading && <p style={styles.status}>{t('kiosk_loading')}</p>}
+   {!loading && error && <p style={styles.error}>{t('kiosk_connectionLost')}</p>}
+   {!loading && !error && !station && <p style={styles.error}>{t('kiosk_stationNotFound', {publicId})}</p>}
    {station && promo && (
     <div className="kiosk-promo">
      <PromoMedia item={promo} />
      {station.online && <div className="kiosk-corner-qr" style={styles.cornerQr}>
       <QRCodeSVG value={qrTarget} size={96} bgColor="#f7f8f2" fgColor="#19382c" />
-      <span style={styles.cornerLabel}>Scannez pour louer</span>
+      <span style={styles.cornerLabel}>{t('kiosk_scanToRent')}</span>
      </div>}
     </div>
    )}
@@ -60,17 +80,17 @@ export default function KioskPage({params}: {params: Promise<{publicId: string}>
       <h1 style={styles.title}>{station.venue.name}</h1>
       <p style={styles.subtitle}>{station.venue.city}</p>
       {display?.idleContent && <p style={styles.idleContent}>{display.idleContent}</p>}
-      <div style={styles.badge(station.online)}>{station.online ? 'En ligne' : 'Hors ligne'}</div>
-      {station.online && <p style={styles.count}>{station.available > 0 ? `${station.available} batterie${station.available > 1 ? 's' : ''} disponible${station.available > 1 ? 's' : ''}` : 'Toutes les batteries sont en cours de location'}</p>}
-      {station.online && data?.pricing && <p style={styles.price}>{euro(data.pricing.hourlyCents)} / heure commencée · maximum {euro(data.pricing.capCents)}<br/>Caution {euro(data.pricing.depositCents)}, libérée au retour</p>}
-      {station.online && <ol style={styles.steps}><li>1 · Scannez le code</li><li>2 · Payez la caution</li><li>3 · Prenez la batterie</li><li>4 · Rendez-la dans n’importe quelle borne</li></ol>}
-      {!station.online && <p style={styles.error}>Cette borne est momentanément indisponible. Une autre borne BATYEO est peut-être proche de vous.</p>}
+      <div style={styles.badge(station.online)}>{t(station.online ? 'kiosk_online' : 'kiosk_offline')}</div>
+      {station.online && <p style={styles.count}>{station.available > 0 ? t('kiosk_available', {count: String(station.available), plural: station.available > 1 ? 's' : ''}) : t('kiosk_allRented')}</p>}
+      {station.online && data?.pricing && <p style={styles.price}>{t('kiosk_price', {hourly: euro(data.pricing.hourlyCents), cap: euro(data.pricing.capCents)})}<br/>{t('kiosk_deposit', {deposit: euro(data.pricing.depositCents)})}</p>}
+      {station.online && <ol style={styles.steps}><li>{t('kiosk_step1')}</li><li>{t('kiosk_step2')}</li><li>{t('kiosk_step3')}</li><li>{t('kiosk_step4')}</li></ol>}
+      {!station.online && <p style={styles.error}>{t('kiosk_unavailable')}</p>}
      </div>
      {station.online && <div className="kiosk-qr">
       <div style={styles.qrCard}>
        <QRCodeSVG value={qrTarget} size={260} bgColor="#f7f8f2" fgColor="#19382c" />
       </div>
-      <p style={styles.instructions}>Scannez avec l’appareil photo de votre téléphone</p>
+      <p style={styles.instructions}>{t('kiosk_scanInstructions')}</p>
      </div>}
     </div>
    )}
