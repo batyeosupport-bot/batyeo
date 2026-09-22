@@ -15,7 +15,7 @@ import {deliverNotices,warnedLongEnough,planOpsDigest} from '../core/notificatio
 import {MIN_PASSWORD_LENGTH,TEAM_ROLES,applyOwnPassword,createTeamMember,resetUserPassword,setUserDisabled} from '../core/accounts';
 import {providerHealth} from '../core/manufacturer-sync';
 import {partnerStatements} from '../core/statements';
-import {dashboard,rentalView,customerRentalView,stationViews,stationDisplaySnapshot,displayConfigFor,canViewFinance} from '../core/queries';
+import {dashboard,rentalView,customerRentalView,publicStationViews,stationDisplaySnapshot,displayConfigFor,canViewFinance} from '../core/queries';
 import {checksumConfig} from '../core/runtime-config';
 import {heartbeatHealth} from '../core/heartbeat';
 import {validateTranslations} from '../core/i18n';
@@ -30,6 +30,17 @@ const MEDIA_UPLOAD_LIMITS={IMAGE:{types:['image/jpeg','image/png','image/webp','
 
 const engine=new RentalEngine();
 const ON_DEMAND_MIN_GAP_MS=30_000,PUBLIC_REFRESH_MIN_GAP_MS=120_000;
+/**
+ * Rate-limit bucket key for the caller. `x-forwarded-for` is appended to by each proxy, so only the
+ * LAST entry is written by our own edge and cannot be forged; a client-supplied prefix is ignored.
+ * Falling back to a single shared bucket would let one caller exhaust everyone's quota, so an
+ * unknown peer gets its own unlimited-cardinality miss rather than joining a global one.
+ */
+function clientIp(request:Request):string{
+ const forwarded=request.headers.get('x-forwarded-for');
+ if(forwarded){const hops=forwarded.split(',').map(hop=>hop.trim()).filter(Boolean);if(hops.length)return hops[hops.length-1];}
+ return request.headers.get('x-real-ip')?.trim()||'unknown';
+}
 const station=new MockBatteryStationProvider();
 const id=z.string().min(1).max(100);
 /** Telemetry a station runtime reports; `stationId`/`runtimeId`/`at` are taken from the credential and the server clock, never from the body. */
@@ -86,14 +97,16 @@ async function route(request:Request,path:string){
   const sync=manufacturerSync?await manufacturerSync.run({trigger:'SCHEDULED'}):null;
   let purgedWebhookEvents=0;
   await repository.transaction(d=>{engine.refreshOverdue(d,now);purgedWebhookEvents=purgeSettledWebhookEvents(d,now);});
-  // Warnings go out first, and a customer we hold an address for is never charged before one has
-  // really been delivered: the site promises to warn before any deposit is taken, and a failed send
-  // just postpones the capture to the next run instead of breaking that promise.
+  // Warnings go out first, and NO customer is charged before one has really been delivered: /terms §5
+  // and /privacy §3 promise a warning before any deposit is taken, with no exception for customers who
+  // left no address or for a deployment with no mailer. Those cases used to skip straight to capture,
+  // which is the one reading of the promise a chargeback would overturn. They now hold instead and are
+  // reported as `skippedUnwarned` for an operator to settle by hand.
   const expiredUnconfirmed=stripeCoordinator?await stripeCoordinator.expireStale(repository,now).catch(()=>0):0;
   let notices={sent:0,failed:0};
   if(mailConfig)notices=await deliverNotices(repository,mailConfig.mailer,now).catch(()=>({sent:0,failed:0}));
   const snapshotForCapture=await repository.read();
-  const candidates=snapshotForCapture.rentals.filter(r=>overdueLossEligible(r,now)&&(!mailConfig||!r.contactEmail||warnedLongEnough(snapshotForCapture,r,now)));
+  const candidates=snapshotForCapture.rentals.filter(r=>overdueLossEligible(r,now)&&warnedLongEnough(snapshotForCapture,r,now));
   const skippedUnwarned=snapshotForCapture.rentals.filter(r=>overdueLossEligible(r,now)).length-candidates.length;
   const losses:{rentalId:string;status:'captured'|'failed'}[]=[];
   for(const candidate of candidates){
@@ -135,7 +148,11 @@ async function route(request:Request,path:string){
  }
  if(request.method==='POST'&&path==='manufacturer/webhook'){
   const raw=await request.text();if(raw.length>256_000)throw new DomainError('Webhook trop volumineux.',413);let payload:unknown;try{payload=JSON.parse(raw);}catch{throw new DomainError('Payload fabricant invalide.',400);}z.record(z.unknown()).parse(payload);
-  const payloadHash=await sha256(raw),source='manufacturer:bajie',ip=request.headers.get('cf-connecting-ip')??'local';const inserted=await repository.transaction(d=>{rateLimit(d,`manufacturer-webhook-${ip}`,120);if(d.webhookEvents.some(event=>event.source===source&&event.externalId===payloadHash))return false;d.webhookEvents.push({id:crypto.randomUUID(),source,externalId:payloadHash,payloadHash,payload,receivedAt:Date.now(),processedAt:null,status:'UNTRUSTED',error:'Aucune signature fabricant officielle confirmée.'});return true;});if(!inserted)return reply({received:true,duplicate:true,trusted:false},202);
+  const payloadHash=await sha256(raw),source='manufacturer:bajie',ip=clientIp(request);
+  // Unsigned public route: anyone can post here. Only a bounded excerpt is persisted — the hash is what
+  // deduplicates, and the body is never the source of truth (a real cabinet/query re-read is).
+  const excerpt=raw.length>2_048?raw.slice(0,2_048):raw;
+  const inserted=await repository.transaction(d=>{rateLimit(d,`manufacturer-webhook-${ip}`,120);if(d.webhookEvents.some(event=>event.source===source&&event.externalId===payloadHash))return false;d.webhookEvents.push({id:crypto.randomUUID(),source,externalId:payloadHash,payloadHash,payload:excerpt,receivedAt:Date.now(),processedAt:null,status:'UNTRUSTED',error:'Aucune signature fabricant officielle confirmée.'});return true;});if(!inserted)return reply({received:true,duplicate:true,trusted:false},202);
   if(!manufacturerSync)return reply({received:true,duplicate:false,trusted:false,reconciliation:'not_configured'},202);
   const linked=(await repository.read()).stationProviderLinks.some(link=>link.active);if(!linked)return reply({received:true,duplicate:false,trusted:false,reconciliation:'no_linked_station'},202);
   const run=await manufacturerSync.run({trigger:'WEBHOOK'});await repository.transaction(d=>{const event=d.webhookEvents.find(row=>row.source===source&&row.externalId===payloadHash);if(event){event.status=run.status==='FAILED'?'FAILED':'PROCESSED';event.processedAt=Date.now();event.error=run.status==='FAILED'?'La vérification read-only fabricant a échoué.':null;}});return reply({received:true,duplicate:false,trusted:false,reconciliation:run.status},202);
@@ -183,7 +200,7 @@ async function route(request:Request,path:string){
   const d=await repository.read();const actor=await actorFor(request,d);
   if(path==='health')return reply({status:'ok',demo:options.demo,providers:{payment:paymentMode,station:batteryEjector?'manufacturer':'mock',manufacturer:manufacturerProvider?'read_only':'not_configured'},manufacturerHealth:providerHealth(d),serverTime:Date.now()});
   if(path==='public'){await refreshFromCabinets(PUBLIC_REFRESH_MIN_GAP_MS);}
- if(path==='public')return reply({stations:stationViews(await repository.read()).filter(s=>!s.archivedAt),pricing:d.pricing[0],demo:options.demo,payment:paymentMode,emailEnabled:Boolean(mailConfig),cardPayments:Boolean(stripeCoordinator&&publishableKey)});
+ if(path==='public')return reply({stations:publicStationViews(await repository.read()).filter(s=>!s.archivedAt),pricing:d.pricing[0],demo:options.demo,payment:paymentMode,emailEnabled:Boolean(mailConfig),cardPayments:Boolean(stripeCoordinator&&publishableKey)});
   if(path.startsWith('translations/')){
    const config=displayConfigFor(d,path.split('/')[1]);
    return reply({locale:config.locale,translations:config.translations});
@@ -237,7 +254,7 @@ async function route(request:Request,path:string){
  verifyOrigin(request);
  const raw=await request.text();if(raw.length>16_384)throw new DomainError('Requête trop volumineuse.',413);
  let body:unknown;try{body=JSON.parse(raw);}catch{throw new DomainError('Requête invalide.',400);}
- const ip=request.headers.get('cf-connecting-ip')??'local';
+ const ip=clientIp(request);
  if(path==='runtime/enroll'){
   const input=z.object({tokenId:id,token:z.string().min(32).max(128),runtimeId:id}).strict().parse(body);
   await repository.transaction(d=>rateLimit(d,`runtime-enroll-${ip}`,20));

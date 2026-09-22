@@ -10,6 +10,16 @@ import type {PaymentMode} from './payment-mode';
 import {heartbeatHealth} from './heartbeat';
 import {evaluateAlerts} from './ops-alerts';
 export function stationViews(d:Data,now=Date.now()){return d.stations.map(s=>({...s,venue:d.venues.find(v=>v.id===s.venueId)!,available:cappedAvailability(d,s.id,d.slots.filter(slot=>slot.stationId===s.id&&d.batteries.some(b=>b.id===slot.batteryId&&b.status==='AVAILABLE')).length,now),freeSlots:d.slots.filter(slot=>slot.stationId===s.id&&!slot.batteryId).length}));}
+/**
+ * What an unauthenticated caller may see. stationViews spreads the whole row, which carried
+ * providerDeviceId (the cabinet's id at ChargeNow), stripeTerminalLocationId and the internal
+ * rentalsBlockedReason out to /api/core/public — an explicit allowlist is the only shape that
+ * cannot leak a column added later.
+ */
+export function publicStationViews(d:Data,now=Date.now()){
+ return stationViews(d,now).map(s=>({id:s.id,publicId:s.publicId,online:s.online,capacity:s.capacity,available:s.available,freeSlots:s.freeSlots,rentalsBlocked:s.rentalsBlocked,archivedAt:s.archivedAt,
+  venue:{id:s.venue.id,name:s.venue.name,city:s.venue.city,address:s.venue.address,category:s.venue.category,hours:s.venue.hours,latitude:s.venue.latitude,longitude:s.venue.longitude}}));
+}
 /** Plain Error() here used to reach handle()'s generic 503 instead of a clean 404 — harmless while every caller already validated the station, but reachable the moment an unvalidated customer-supplied id (e.g. a stale QR code) reaches it. */
 export function stationDisplaySnapshot(d:Data,stationId:string):StationPublicSnapshot {const station=stationViews(d).find(row=>row.id===stationId||row.publicId===stationId);if(!station)throw new DomainError('Station introuvable.',404);const pricing=d.pricing[0];if(!pricing)throw new DomainError('Tarification indisponible.',503);return {stationId:station.id,publicId:station.publicId,venueName:station.venue.name,online:station.online,availableBatteries:station.available,capacity:station.capacity,hourlyCents:pricing.hourlyCents,capCents:pricing.capCents,depositCents:pricing.depositCents,qrTarget:`/rent/${station.publicId}`,providerHealth:providerHealth(d).status};}
 /**
@@ -33,7 +43,7 @@ export const canViewFinance=(actor:Actor)=>['SUPER_ADMIN','ADMIN','FINANCE','PAR
 /** `contact` is opt-in and off by default: a customer's address is BATYEO's to act on, not a
  * partner's to harvest — a venue owner sees the rentals on their own cabinets, never who made them. */
 export function rentalView(d:Data,r:Rental,financial=true,contact=false){const elapsedMs=r.startedAt===null?0:Math.max(0,(r.returnedAt??Date.now())-r.startedAt+r.simulatedMinutes*60_000);return {...r,commissionCents:financial?r.commissionCents:undefined,contactEmail:contact?r.contactEmail??null:undefined,customerId:undefined,idempotencyKey:undefined,elapsedMs,currentCents:r.startedAt===null?0:calculatePrice(elapsedMs,r.pricing),station:stationViews(d).find(s=>s.id===r.stationId),events:d.events.filter(e=>e.rentalId===r.id),payment:financial?d.payments.find(p=>p.rentalId===r.id):undefined};}
-export function customerRentalView(d:Data,r:Rental){const view=rentalView(d,r,false);const payment=d.payments.find(p=>p.rentalId===r.id);return {...view,payment:payment?{authorizedCents:payment.authorizedCents,capturedCents:payment.capturedCents,releasedCents:payment.releasedCents,status:payment.status}:undefined};}
+export function customerRentalView(d:Data,r:Rental){const view=rentalView(d,r,false);const payment=d.payments.find(p=>p.rentalId===r.id);return {...view,station:publicStationViews(d).find(s=>s.id===r.stationId),payment:payment?{authorizedCents:payment.authorizedCents,capturedCents:payment.capturedCents,releasedCents:payment.releasedCents,status:payment.status}:undefined};}
 /** `meta` carries what the deployment actually is. It used to be hardcoded `demo:true`, so a real
  * deployment kept telling its own operators the data was fake. */
 export function dashboard(d:Data,actor:Actor,meta:{demo:boolean;payment:PaymentMode}={demo:false,payment:'mock'}){

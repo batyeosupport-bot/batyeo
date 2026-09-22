@@ -9,8 +9,14 @@ import type {Data} from './types';
  * evidence, and dropping them is not a performance decision to make here.
  */
 export const WEBHOOK_RETENTION_MS=30*24*60*60*1000;
+/**
+ * UNTRUSTED is purged alongside PROCESSED: the manufacturer webhook is public and unsigned, so
+ * anyone can create those rows and nothing ever promotes them — left in place they grew without
+ * bound. RECEIVED and FAILED only exist behind a verified Stripe signature and stay for diagnosis.
+ */
+const PURGEABLE:ReadonlySet<string>=new Set(['PROCESSED','UNTRUSTED']);
 export function purgeSettledWebhookEvents(d:Data,now=Date.now()):number{
  const cutoff=now-WEBHOOK_RETENTION_MS,before=d.webhookEvents.length;
- d.webhookEvents=d.webhookEvents.filter(e=>e.status!=='PROCESSED'||e.receivedAt>cutoff);
+ d.webhookEvents=d.webhookEvents.filter(e=>!PURGEABLE.has(e.status)||e.receivedAt>cutoff);
  return before-d.webhookEvents.length;
 }

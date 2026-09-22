@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {emptyData} from '../core/types';
-import {displayConfigFor} from '../core/queries';
+import {displayConfigFor,publicStationViews} from '../core/queries';
 
 function baseData(){
  const d=emptyData();
@@ -11,6 +11,21 @@ function baseData(){
  d.stations.push({id:'station-2',publicId:'station-2-public',venueId:'v',partnerId:'p',online:true,failure:'none',capacity:8});
  return d;
 }
+
+// /api/core/public is unauthenticated. This asserts the allowlist by absence, so a column added to
+// Station later cannot reach a stranger just because the view used to spread the whole row.
+test('the public station view never carries provider, Terminal or internal operations fields',()=>{
+ const d=baseData();
+ Object.assign(d.stations[0],{providerDeviceId:'DTA55480',providerStatus:'online',stripeTerminalLocationId:'tml_secret',
+  rentalsBlocked:true,rentalsBlockedReason:'Batteries retirées pour maintenance',lastSeenAt:Date.now(),provider:'bajie'});
+ const [station]=publicStationViews(d);
+ for(const leaked of ['providerDeviceId','providerStatus','providerLastSyncedAt','stripeTerminalLocationId','stripeTerminalLocationUpdatedAt','rentalsBlockedReason','rentalsBlockedAt','lastSeenAt','provider','failure','partnerId','venueId'])
+  assert.equal(leaked in station,false,`${leaked} must not reach an unauthenticated caller`);
+ assert.equal(station.publicId,'station-1-public');
+ assert.equal(station.rentalsBlocked,true);
+ assert.equal(station.venue.name,'Le Bar');
+ assert.equal('partnerId' in station.venue,false);
+});
 
 test('displayConfigFor throws for an unknown station or venue',()=>{
  const d=baseData();

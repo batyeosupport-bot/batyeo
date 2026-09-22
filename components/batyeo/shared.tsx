@@ -7,11 +7,11 @@ import {Input} from '@/components/ui/input';
 import {Skeleton} from '@/components/ui/skeleton';
 import {Table,TableBody,TableCell,TableHead,TableHeader,TableRow} from '@/components/ui/table';
 import {Select,SelectContent,SelectItem,SelectTrigger,SelectValue} from '@/components/ui/select';
-import type {dashboard,rentalView,stationViews} from '@/core/queries';
+import type {dashboard,rentalView,publicStationViews} from '@/core/queries';
 import type {PricingStrategy} from '@/core/pricing';
 export type Dashboard=ReturnType<typeof dashboard>;
 export type RentalView=ReturnType<typeof rentalView>;
-export type StationView=ReturnType<typeof stationViews>[number];
+export type StationView=ReturnType<typeof publicStationViews>[number];
 export type PublicData={stations:StationView[];pricing:PricingStrategy;demo:boolean;payment:'mock'|'stripe_test'|'stripe_live';emailEnabled:boolean;cardPayments?:boolean};
 export async function api<T>(path:string,body?:unknown):Promise<T>{const r=await fetch('/api/core/'+path,{method:body===undefined?'GET':'POST',headers:body===undefined?undefined:{'Content-Type':'application/json'},body:body===undefined?undefined:JSON.stringify(body)});const d=await r.json();if(!r.ok)throw new Error(typeof d==='object'&&d!==null&&'error' in d?String(d.error):'Une erreur est survenue.');return d as T;}
 export function useApi<T>(path:string,interval=0){const [data,setData]=useState<T|null>(null),[error,setError]=useState(''),[loading,setLoading]=useState(true);const refresh=useCallback(async()=>{try{setData(await api<T>(path));setError('');}catch(e){setError(e instanceof Error?e.message:'Service indisponible.');}finally{setLoading(false);}},[path]);useEffect(()=>{const initial=setTimeout(()=>void refresh(),0);const timer=interval?setInterval(()=>{if(!document.hidden)void refresh();},interval):undefined;return()=>{clearTimeout(initial);if(timer)clearInterval(timer);};},[refresh,interval]);return{data,error,loading,refresh};}
