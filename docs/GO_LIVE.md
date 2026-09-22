@@ -164,6 +164,12 @@ caisse tactile.
    L'application démarre ensuite toute seule au redémarrage de la borne.
 6. **Vérifier** dans Admin → Affichage : la borne doit apparaître « répond » avec un signal récent.
 
+**En attendant l'application, l'écran fonctionne déjà dans un navigateur.** Ouvre
+`https://TON-DOMAINE/kiosk/<identifiant public>` sur n'importe quel écran ou tablette connectée :
+il affiche le prix et le QR, puis bascule sur tes images et vidéos (Admin → Affichage → Médias),
+avec ton message d'accueil et ton bandeau de maintenance (Admin → Affichage → Écran des bornes),
+un petit QR restant visible en permanence. C'est un vrai plan de secours, pas juste un aperçu.
+
 À savoir :
 - **Ne supprime pas l'application de ChargeNow** : c'est très probablement elle qui garde la borne
   connectée au cloud dont BATYEO dépend. La tienne s'affiche par-dessus.

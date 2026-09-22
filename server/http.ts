@@ -186,6 +186,14 @@ async function route(request:Request,path:string){
    const config=displayConfigFor(d,path.split('/')[1]);
    return reply({locale:config.locale,translations:config.translations});
   }
+  // A safe, public subset of the same station config the paired runtime app receives: what a
+  // browser-only screen (no Android device, no credential) needs to render the same idle content
+  // and promotional media while the physical kiosk app isn't installed yet. Never the Stripe
+  // Terminal location id or anything else runtime/config exposes only to a credentialed device.
+  if(path.startsWith('display/')){
+   const config=displayConfigFor(d,path.split('/')[1]);
+   return reply({venueName:config.venueName,idleContent:config.idleContent,maintenanceBanner:config.maintenanceBanner,refreshIntervalMs:config.refreshIntervalMs,playlist:config.playlist?.items??[]});
+  }
   if(path==='me')return reply({user:actor?{...actor,name:d.users.find(u=>u.id===actor.id)?.name}:null});
   if(path==='customer'){
    const existing=customerToken(request);

@@ -149,3 +149,22 @@ test('an operator can close a rental the cabinet failed to detect: priced up to 
  validateData(repo.data);
  assert.equal((await post('operations',{rentalId:rental.id,stationId:'station-paris',reason:'again'})).status,409,'a closed rental cannot be closed again');
 });
+
+test('the public display route exposes only the safe kiosk-screen fields — idle content, banner, active playlist — never the Stripe Terminal location or unpublished/expired media',async()=>{
+ const repo=new MemoryRepository(seedData('x'));
+ repo.data.displayConfigs.push({id:'dc1',stationId:'station-paris',idleContent:'Rechargez pendant que vous profitez du bar !',supportContact:'contact@batyeo.fr',maintenanceBanner:'Travaux en cours',locale:'fr-FR',refreshIntervalMs:20000,featureFlags:{},translations:null,updatedAt:1});
+ repo.data.stations.find(s=>s.id==='station-paris')!.stripeTerminalLocationId='tml_secret';
+ repo.data.media.push(
+  {id:'m1',name:'Live',kind:'IMAGE',uri:'https://cdn.test/live.png',checksum:'a',durationMs:5000,status:'PUBLISHED',startsAt:null,endsAt:null,targetStationIds:['station-paris'],createdAt:1,updatedAt:1},
+  {id:'m2',name:'Draft',kind:'IMAGE',uri:'https://cdn.test/draft.png',checksum:'b',durationMs:5000,status:'DRAFT',startsAt:null,endsAt:null,targetStationIds:['station-paris'],createdAt:1,updatedAt:1},
+  {id:'m3',name:'ForOther',kind:'IMAGE',uri:'https://cdn.test/other.png',checksum:'c',durationMs:5000,status:'PUBLISHED',startsAt:null,endsAt:null,targetStationIds:['station-lyon'],createdAt:1,updatedAt:1},
+ );
+ const res=await createApi(repo,{demo:false,allowLegacyCredentials:false},{}).GET(new Request(origin+'/api/core/display/paris-demo'),{params:Promise.resolve({path:['display','paris-demo']})});
+ assert.equal(res.status,200);
+ const body=await res.json() as {venueName:string;idleContent:string;maintenanceBanner:string|null;playlist:{id:string}[]};
+ assert.equal(body.idleContent,'Rechargez pendant que vous profitez du bar !');
+ assert.equal(body.maintenanceBanner,'Travaux en cours');
+ assert.deepEqual(body.playlist.map(m=>m.id),['m1'],'only the published item targeted at this station');
+ assert.ok(!JSON.stringify(body).includes('tml_secret'),'the Stripe Terminal location id is for the credentialed runtime app only, never a public page');
+ assert.equal((await createApi(repo,{demo:false,allowLegacyCredentials:false},{}).GET(new Request(origin+'/api/core/display/unknown-station'),{params:Promise.resolve({path:['display','unknown-station']})})).status,404);
+});

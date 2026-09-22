@@ -88,6 +88,14 @@ Route `system/status` : mode de paiement, fournisseur de la borne, verrou d'éje
 
 > **Paiement par carte : construit (2026-09-21).** Parcours en deux temps : `POST start` crée la location et l'intent Stripe (carte uniquement) et renvoie `clientSecret` + `publishableKey` ; la page charge Stripe.js et le Payment Element ; `POST rental/confirm-payment` relit l'intent chez Stripe (`requires_capture`, montant exact, `metadata.rentalId`) avant d'éjecter (`StripeRentalCoordinator.begin/confirm/activate`). `expireStale` (cron, 15 min) et `abandon` libèrent les locations jamais confirmées. Correctif au passage : l'éjecteur réel reçoit désormais l'identifiant **interne** de la station (il recevait l'identifiant public du QR et aurait échoué *après* la sortie de la batterie). **Reste** : l'app mobile n'affiche pas le formulaire de carte (mock uniquement) ; le formulaire n'a été vérifié dans Chrome qu'avec un **faux Stripe.js** — jamais avec le vrai Stripe : premier test réel = carte 4242 en `stripe_test`.
 
+> **Écran de la borne en secours web (2026-09-22).** L'admin (Affichage → Médias + Écran des bornes)
+> était déjà fonctionnel, mais rien n'en affichait le résultat sans l'application Android installée.
+> `GET display/:publicId` (public, sans identifiants) expose maintenant le sous-ensemble sûr de
+> `displayConfigFor` (message d'accueil, bandeau de maintenance, playlist active — jamais l'ID de
+> Location Stripe Terminal). `app/kiosk/[publicId]/page.tsx` alterne l'écran prix/QR (20 s) avec
+> chaque média promotionnel (sa propre durée), un petit QR restant affiché en permanence pendant les
+> médias. Vérifié en Chrome avec une vraie image, un bandeau et un message d'accueil.
+
 > **Mise en service : `docs/GO_LIVE.md`** — checklist ordonnée, avec les commandes exactes. Tout ce qui pouvait se faire par le code est fait (2026-09-21) : déplacement de la borne réelle (`manufacturer/move-link`), amorçage de production (`pnpm db:bootstrap`, `--retire-demo`), envoi d'emails complet mais éteint, détection de borne hors ligne et de retour sans webhook (lecture à la demande, limitée). Ce qui reste est **uniquement** externe : Tony, Stripe, statut juridique, Resend, secrets Vercel, migrations, terrain.
 
 ## Bilan de complétude (2026-09-19) — le projet n'est PAS fini pour de vrais clients
