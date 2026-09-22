@@ -17,6 +17,10 @@ jobs:
     env:
       DATABASE_URL: postgresql://batyeo:batyeo_test_only@localhost:5432/batyeo_test
       BATYEO_TEST_DATABASE_URL: postgresql://batyeo:batyeo_test_only@localhost:5432/batyeo_test
+      # db:migrate refuse de partir sans les deux adresses et la confirmation du projet visé
+      # (core/db-target.ts) : sans elles la CI s'arrête ici et n'exécute jamais les étapes suivantes.
+      DIRECT_DATABASE_URL: postgresql://batyeo:batyeo_test_only@localhost:5432/batyeo_test
+      BATYEO_CONFIRM_DATABASE: localhost
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
