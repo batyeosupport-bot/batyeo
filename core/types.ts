@@ -7,7 +7,7 @@ import type { VenueBranding, VenuePromo } from './screen';
 export interface StationHeartbeatRecord extends StationHeartbeat { id:string; }
 export const ROLES = ['SUPER_ADMIN','ADMIN','OPERATIONS','FINANCE','SUPPORT','PARTNER_ADMIN','PARTNER_USER'] as const;
 export type Role = typeof ROLES[number];
-export interface User { id:string; email:string; name:string; role:Role; partnerId:string|null; passwordHash:string; disabledAt?:number|null; authVersion?:number; }
+export interface User { id:string; email:string; name:string; role:Role; partnerId:string|null; passwordHash:string; disabledAt?:number|null; authVersion?:number; /** Double vérification : secret TOTP (en attente tant que totpEnabledAt est vide) et dernier pas accepté, contre le rejeu. */ totpSecret?:string|null; totpEnabledAt?:number|null; totpLastStep?:number|null; }
 export interface Partner { id:string; name:string; city:string; /** Taux de commission propre au partenaire. null = ce partenaire suit le taux de la grille tarifaire active. */ commissionBps:number|null; /** Fiche légale, remplie par BATYEO : sans elle, le relevé de commissions ne peut pas être versé. */ legalName?:string; siret?:string; billingAddress?:string; contactName?:string; contactEmail?:string; contactPhone?:string; iban?:string; contractStartedAt?:number|null; }
 export interface Venue { id:string; partnerId:string; name:string; city:string; address:string; category:string; hours:string; latitude?:number|null; longitude?:number|null; phone?:string; branding?:VenueBranding|null; }
 export type FailureMode = 'none'|'ejection'|'timeout'|'payment';

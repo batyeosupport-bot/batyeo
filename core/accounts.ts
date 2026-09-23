@@ -3,10 +3,10 @@ import {DomainError} from './providers';
 
 export const MIN_PASSWORD_LENGTH=10;
 export const TEAM_ROLES=['PARTNER_ADMIN','PARTNER_USER'] as const;
-export interface TeamMember {id:string;name:string;email:string;role:Role;partnerId:string|null;disabledAt:number|null;}
+export interface TeamMember {id:string;name:string;email:string;role:Role;partnerId:string|null;disabledAt:number|null;twoFactor:boolean;}
 
 const canManageTeam=(actor:Actor)=>['SUPER_ADMIN','ADMIN','PARTNER_ADMIN'].includes(actor.role);
-const view=(u:User):TeamMember=>({id:u.id,name:u.name,email:u.email,role:u.role,partnerId:u.partnerId,disabledAt:u.disabledAt??null});
+const view=(u:User):TeamMember=>({id:u.id,name:u.name,email:u.email,role:u.role,partnerId:u.partnerId,disabledAt:u.disabledAt??null,twoFactor:!!u.totpEnabledAt});
 
 /** Accounts the actor may administer: every login for BATYEO staff, only their own partner's for a PARTNER_ADMIN. Never includes password hashes. */
 export function teamFor(d:Data,actor:Actor):TeamMember[]{
@@ -44,10 +44,10 @@ export function setUserDisabled(d:Data,actor:Actor,userId:string,disabled:boolea
  return target;
 }
 
-/** Replaces the password and invalidates every session of that user (authVersion bump), so a leaked old password stops working everywhere at once. */
+/** Replaces the password and invalidates every session of that user (authVersion bump), so a leaked old password stops working everywhere at once. Also the recovery path for a lost phone: the double vérification is switched off and must be set up again. */
 export function resetUserPassword(d:Data,actor:Actor,userId:string,passwordHash:string):User{
  const target=managed(d,actor,userId);
- target.passwordHash=passwordHash;target.authVersion=(target.authVersion??0)+1;
+ target.passwordHash=passwordHash;target.authVersion=(target.authVersion??0)+1;target.totpSecret=null;target.totpEnabledAt=null;target.totpLastStep=null;
  d.sessions=d.sessions.filter(s=>s.userId!==target.id);
  return target;
 }

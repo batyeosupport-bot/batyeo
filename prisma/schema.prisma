@@ -40,6 +40,9 @@ model User {
   partnerId String?
   disabledAt DateTime?
   authVersion Int @default(0)
+  totpSecret String?
+  totpEnabledAt DateTime?
+  totpLastStep Int?
   role         Role
   memberships  PartnerUser[]
   sessions     Session[]

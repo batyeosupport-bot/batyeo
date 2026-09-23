@@ -18,6 +18,7 @@ import {partnerStatements} from '../core/statements';
 import {dashboard,rentalView,customerRentalView,publicStationViews,stationDisplaySnapshot,displayConfigFor,canViewFinance} from '../core/queries';
 import {checksumConfig} from '../core/runtime-config';
 import {heartbeatHealth} from '../core/heartbeat';
+import {MFA_REQUIRED_MESSAGE,generateTotpSecret,totpUri,verifyTotp} from '../core/totp';
 import {validateTranslations} from '../core/i18n';
 import type {Actor,Data,StationHeartbeatRecord} from '../core/types';
 import {createStation,createVenue,updateVenue,publicQrUrl,setStripeTerminalLocation,blockStationRentals,unblockStationRentals,archiveStation,restoreStation,relocateStation,setPartnerCommission,createPartner,adoptProviderInventory,setBatteryService} from '../core/station-admin';
@@ -274,18 +275,26 @@ async function route(request:Request,path:string){
   return reply({...result,credential:secret},201);
  }
  if(path==='login'){
-  const input=z.object({email:z.string().trim().email().max(200),password:z.string().min(1).max(200)}).strict().parse(body);
+  const input=z.object({email:z.string().trim().email().max(200),password:z.string().min(1).max(200),code:z.string().trim().max(10).optional()}).strict().parse(body);
   const email=input.email.toLowerCase();
   await repository.transaction(d=>{rateLimit(d,`login-ip-${ip}`,30);rateLimit(d,`login-user-${email}`,12);});
   const previous=await repository.read();const candidate=previous.users.find(u=>u.email.toLowerCase()===email);
   const verified=await verifyPassword(input.password,candidate?.passwordHash??'',options.allowLegacyCredentials);
   if(!verified||!candidate)throw new DomainError('Email ou mot de passe incorrect.',401);
+  // Second factor, checked only after the password so it never reveals which accounts have it on.
+  let acceptedStep:number|null=null;
+  if(candidate.totpEnabledAt&&candidate.totpSecret){
+   if(!input.code)throw new DomainError(MFA_REQUIRED_MESSAGE,401);
+   acceptedStep=await verifyTotp(candidate.totpSecret,input.code,Date.now(),candidate.totpLastStep??null);
+   if(acceptedStep===null)throw new DomainError('Code de vérification incorrect ou déjà utilisé.',401);
+  }
   const upgraded=candidate.passwordHash.startsWith('pbkdf2-')?candidate.passwordHash:await createPasswordHash(input.password);
   const token=crypto.randomUUID()+crypto.randomUUID(),digest=await sha256(token);
   const old=cookie(request,'batyeo_session'),oldDigest=old?await sha256(old):undefined;
   const user=await repository.transaction(d=>{
    const u=d.users.find(u=>u.id===candidate.id);
    if(!u||u.passwordHash!==candidate.passwordHash||!actorForUser(d,u))throw new DomainError('Email ou mot de passe incorrect.',401);
+   if(acceptedStep!==null){if(u.totpLastStep!=null&&acceptedStep<=u.totpLastStep)throw new DomainError('Code de vérification incorrect ou déjà utilisé.',401);u.totpLastStep=acceptedStep;}
    u.passwordHash=upgraded;
    d.sessions=d.sessions.filter(s=>s.expiresAt>Date.now()&&s.id!==oldDigest);
    d.sessions.push({id:digest,userId:u.id,expiresAt:Date.now()+SESSION_LIFETIME_MS,authVersion:u.authVersion??0});
@@ -772,6 +781,41 @@ async function route(request:Request,path:string){
  }
  if(path==='resolve-ticket'){
   authorize(actor,'support');const input=z.object({id}).strict().parse(body);await write('support',(d,actor)=>{const t=d.tickets.find(t=>t.id===input.id);if(!t)throw new DomainError('Demande introuvable.',404);assertTenant(actor!,t.partnerId);t.status='RESOLVED';audit(d,actor!,'Demande résolue : '+t.id);});return reply({ok:true});
+ }
+ if(path==='account/2fa/setup'){
+  authorize(actor,'read');
+  const secret=generateTotpSecret();
+  const email=await repository.transaction(d=>{
+   rateLimit(d,`2fa-setup-${actor!.id}`,10);
+   const me=d.users.find(u=>u.id===actor!.id);if(!me)throw new DomainError('Compte introuvable.',404);
+   if(me.totpEnabledAt)throw new DomainError('La double vérification est déjà active.',409);
+   me.totpSecret=secret;return me.email;
+  });
+  return reply({secret,uri:totpUri(secret,email)});
+ }
+ if(path==='account/2fa/enable'){
+  authorize(actor,'read');
+  const input=z.object({code:z.string().trim().regex(/^\d{6}$/,'Code à 6 chiffres.')}).strict().parse(body);
+  await repository.transaction(d=>rateLimit(d,`2fa-enable-${actor!.id}`,10));
+  const me=(await repository.read()).users.find(u=>u.id===actor!.id);
+  if(!me?.totpSecret||me.totpEnabledAt)throw new DomainError('Commencez par scanner un nouveau QR code.',409);
+  const step=await verifyTotp(me.totpSecret,input.code,Date.now());
+  // 403, not 401: the portal treats a 401 as "logged out".
+  if(step===null)throw new DomainError('Code incorrect. Vérifiez l’heure de votre téléphone et réessayez.',403);
+  await repository.transaction(d=>{const u=d.users.find(u=>u.id===actor!.id)!;if(u.totpSecret!==me.totpSecret)throw new DomainError('Le QR code a changé entre-temps. Réessayez.',409);u.totpEnabledAt=Date.now();u.totpLastStep=step;audit(d,actor!,'Double vérification activée');});
+  return reply({ok:true});
+ }
+ if(path==='account/2fa/disable'){
+  authorize(actor,'read');
+  const input=z.object({password:z.string().min(1).max(200),code:z.string().trim().regex(/^\d{6}$/,'Code à 6 chiffres.')}).strict().parse(body);
+  await repository.transaction(d=>rateLimit(d,`2fa-disable-${actor!.id}`,6));
+  const me=(await repository.read()).users.find(u=>u.id===actor!.id);
+  if(!me?.totpEnabledAt||!me.totpSecret)throw new DomainError('La double vérification n’est pas active.',409);
+  if(!(await verifyPassword(input.password,me.passwordHash,options.allowLegacyCredentials)))throw new DomainError('Mot de passe incorrect.',403);
+  const step=await verifyTotp(me.totpSecret,input.code,Date.now(),me.totpLastStep??null);
+  if(step===null)throw new DomainError('Code incorrect ou déjà utilisé.',403);
+  await repository.transaction(d=>{const u=d.users.find(u=>u.id===actor!.id)!;u.totpSecret=null;u.totpEnabledAt=null;u.totpLastStep=null;audit(d,actor!,'Double vérification désactivée');});
+  return reply({ok:true});
  }
  if(path==='settings/password'){
   authorize(actor,'read');

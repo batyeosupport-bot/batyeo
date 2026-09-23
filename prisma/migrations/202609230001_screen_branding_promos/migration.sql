@@ -81,3 +81,8 @@ BEGIN
   RAISE EXCEPTION 'BATYEO slot exceeds capacity' USING ERRCODE='23514';
  END IF; RETURN NULL;
 END $$;
+
+-- Double vérification (codes à 6 chiffres) : secret, date d'activation, dernier pas accepté (anti-rejeu).
+ALTER TABLE "User" ADD COLUMN IF NOT EXISTS "totpSecret" TEXT;
+ALTER TABLE "User" ADD COLUMN IF NOT EXISTS "totpEnabledAt" TIMESTAMP(3);
+ALTER TABLE "User" ADD COLUMN IF NOT EXISTS "totpLastStep" INTEGER;
