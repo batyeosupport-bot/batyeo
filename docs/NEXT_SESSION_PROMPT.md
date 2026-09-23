@@ -1,4 +1,4 @@
-# Brief de reprise — BATYEO (état au 2026-09-22)
+# Brief de reprise — BATYEO (état au 2026-09-23)
 
 > Colle ce brief tel quel au démarrage d'une nouvelle session. Aucun secret ici : mots de passe,
 > clés Stripe et identifiants ChargeNow restent dans les notes personnelles de l'utilisateur,
@@ -92,34 +92,46 @@ faire tourner une dernière fois une fois tout stabilisé, sans redéployer entr
 
 ## Ce qu'il reste à faire, par priorité
 
-1. **Déplacer la borne réelle** (`DTA55480`) de `paris-demo` (historique de démo) vers une
-   station neuve, avant le premier vrai client. Outil prêt : bouton « Rattacher ici » dans la
-   fiche station (admin), ou route `manufacturer/move-link`. Puis **« Aligner l'inventaire »**
-   pour que les batteries locales reflètent la vraie borne (refusé tant qu'il y a de
-   l'historique ou des locations en cours).
-2. **Tony (fournisseur)** doit répondre à deux questions : désactiver le flux de location natif
-   ChargeNow (sinon deux systèmes peuvent distribuer la même batterie — condition avant
-   d'activer `MANUFACTURER_ALLOW_PHYSICAL_ACTIONS`), et confirmer le format d'inscription au
-   webhook `cabinet/eventPush/config` (BATTERY_IN/BATTERY_BORROW_OUT). Sans webhook, la
-   détection de retour et de borne hors ligne fonctionne quand même mais avec un délai (lecture
-   à la demande à chaque visite du site, au plus une fois toutes les 2 min ; tâche planifiée à
-   3 h du matin en secours).
-3. **Secrets Vercel à vérifier/compléter** : `CRON_SECRET` (tâche planifiée quotidienne
-   `internal/cron` : synchronisation fournisseur + capture des cautions en retard — déjà
-   déclarée dans `vercel.json`), `STRIPE_WEBHOOK_SECRET` (webhook Stripe avec
-   `charge.dispute.created` et `charge.refunded` en plus des événements de paiement standards),
-   `RESEND_API_KEY` + `MAIL_FROM` (aucun email n'est envoyé sans ça — le code est prêt : reçu,
-   avertissement 24 h avant capture de caution, avis de perte, résumé quotidien).
-4. **Statut légal** : SIRET, IBAN, assurance responsabilité (batteries lithium en lieu public).
-   Les pages `/terms` et `/privacy` décrivent déjà le vrai service mais il manque l'identité de
-   l'exploitant et une relecture juridique avant tout encaissement réel.
-5. **Passage en argent réel** : mettre `PAYMENT_PROVIDER=stripe_live` avec une clé `sk_live_…`
-   et `STRIPE_PUBLISHABLE_KEY=pk_live_…` (le serveur refuse tout mélange test/live au démarrage).
-   Ne faire qu'après les points 1-4, et après un nouveau test complet en conditions réelles.
-6. **Mineur, non bloquant** : activer Vercel Blob (Storage) pour le bon fonctionnement du
-   téléversement de médias ; l'app mobile n'a jamais tourné sur un vrai appareil ; le texte
-   « fonctionnement » (4 étapes) de l'écran de borne est encore fixe en français, pas éditable
-   depuis l'admin.
+0. **Migration `202609230001_screen_branding_promos` à coller dans l'éditeur SQL de Supabase
+   AVANT de pousser le code du 2026-09-23** (commits locaux non poussés tant qu'elle n'est pas
+   appliquée) : le code lit `VenuePromo`, `DisplayConfig`, `StationHeartbeat` et les nouvelles
+   colonnes `Partner`/`Venue` ; poussé sans elle, toutes les requêtes répondent 503. Rejouable
+   sans erreur. Elle répare aussi deux données qui n'étaient jamais enregistrées en Postgres
+   (réglages d'affichage des bornes, dernier signal de vie) et ajoute le statut batterie `MISSING`.
+1. **Écran de la borne** : l'affiche BATYEO (`/kiosk/[publicId]`) doit être affichée par l'écran
+   physique. Soit l'APK `runtime/` (build debug existant du 2026-09-18, jamais installé), soit une
+   URL personnalisée dans l'app du fabricant — question pour Tony. L'app native garde aussi son
+   propre carrousel de médias, redondant avec celui de la page : à neutraliser à l'installation.
+2. **Tony (fournisseur)** : désactiver le flux de location natif ChargeNow (condition avant
+   `MANUFACTURER_ALLOW_PHYSICAL_ACTIONS`), confirmer l'inscription au webhook
+   `cabinet/eventPush/config`, et **le TPE intégré à la borne est celui du fournisseur** : le code
+   Stripe Terminal (`runtime/.../TerminalManager.kt`) ne peut pas le piloter. Demander son modèle et
+   son protocole, ou s'il peut router le paiement. En attendant, paiement par téléphone uniquement.
+3. **Secrets Vercel** : `CRON_SECRET`, `STRIPE_WEBHOOK_SECRET`, `RESEND_API_KEY` + `MAIL_FROM`, et
+   **activer Vercel Blob** (sinon l'envoi de logos/photos d'habillage et de promos échoue).
+4. **Statut légal** : SIRET, IBAN, assurance, TVA (absente partout : mention « TVA non
+   applicable, art. 293 B du CGI » ou TVA affichée, selon le statut), relecture juridique.
+5. **Sécurité restante** : double authentification des comptes admin, « mot de passe oublié »,
+   alertes automatiques en cas de panne (Sentry ou équivalent), vérifier les sauvegardes Supabase.
+6. **Passage en argent réel** après tout le reste et un test complet sur la vraie borne.
+
+## Fait le 2026-09-23
+
+- Écran de borne : affiche animée (batterie qui se charge, prix et stock en direct, QR), français
+  par défaut et choix de langue au toucher (FR, EN, ES, IT, DE, PT, 中文), retour au français après
+  60 s. Promos des établissements intercalées, programmées par jour et créneau à l'heure de Paris.
+- Admin → Affichage : « Habillage des écrans » (logo, photo, style, langues, accroches, aperçu
+  exact) et « Promos des établissements ». Un établissement ne modifie plus rien sur son écran
+  (permission `screen` = SUPER_ADMIN/ADMIN) ; il peut seulement **demander** une promo (ticket).
+- Fiche légale partenaire (raison sociale, SIRET, adresse, contact, IBAN, contrat) : BATYEO seul
+  la modifie, IBAN masqué aux rôles sans accès finance. Téléphone de l'établissement.
+- **Stock toujours aligné sur la borne** : après chaque lecture réussie, `mirrorCabinetInventory`
+  recopie le contenu réel (batteries placées, créées, `MISSING` si sorties sans location, remises en
+  service si elles reviennent). « Aligner l'inventaire » utilise la même fonction : l'ancienne
+  version supprimait des lignes et échouait toujours en Postgres. L'éjecteur ne choisit plus
+  qu'une batterie déjà enregistrée disponible dans la station. Délai de mise à jour : 2 min au plus
+  tant qu'un écran ou un client consulte le site (instantané une fois le webhook fabricant actif).
+- En-têtes anti-clickjacking (`vercel.json`).
 
 ## Ce qui est solide (ne pas re-questionner sans raison)
 

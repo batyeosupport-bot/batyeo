@@ -8,16 +8,13 @@ export interface PosterBranding {logoUrl: string | null; backgroundUrl: string |
 /** What the poster reads live, so it can never advertise a price or a stock the station doesn't have. */
 export interface PosterLive {venueName: string; city: string; online: boolean; available: number; hourlyCents: number; capCents: number; depositCents: number; qrTarget: string}
 
-export const POSTER_THEMES: Record<string, Pick<PosterBranding, 'primary' | 'accent'> & {label: string}> = {
- sport: {label: 'Bar sportif', primary: '#0f1f14', accent: '#b6ff3b'},
- lounge: {label: 'Lounge', primary: '#140f0a', accent: '#f3c969'},
- hotel: {label: 'Hôtel', primary: '#0d1a2e', accent: '#f4ead6'},
- batyeo: {label: 'BATYEO', primary: '#19382c', accent: '#d8ed98'},
-};
+export {POSTER_THEMES} from '@/core/screen';
+/** A venue promo as the screen receives it: the schedule label is computed server-side, in Paris time. */
+export interface PosterPromo {id: string; title: string; subtitle: string; highlight: string; imageUrl: string | null; schedule: string}
 
 const HEADLINE_MS = 5000;
-/** Nobody taps a poster: languages take turns, long enough to read two headlines each. */
-const LOCALE_MS = 10_000;
+/** French is the resting language: a tourist's choice holds while they read and scan, then the screen goes back. */
+const LOCALE_RESET_MS = 60_000;
 const STEP_MS = 2200;
 const CHARGE_MS = 7000;
 const FULL_HOLD_MS = 1600;
@@ -72,10 +69,17 @@ function Battery({level, accent}: {level: number; accent: string}) {
  );
 }
 
-export function KioskPoster({branding, live}: {branding: PosterBranding; live: PosterLive}) {
+export function KioskPoster({branding, live, onInteract}: {branding: PosterBranding; live: PosterLive; onInteract?: () => void}) {
  const level = useCharge();
  const locales: PosterLocale[] = branding.locales.length ? branding.locales : ['fr-FR'];
- const locale = locales[useCycle(locales.length, LOCALE_MS)];
+ const [chosen, setChosen] = useState<PosterLocale | null>(null);
+ const locale = chosen && locales.includes(chosen) ? chosen : locales[0];
+ useEffect(() => {
+  if (!chosen) return;
+  const timer = setTimeout(() => setChosen(null), LOCALE_RESET_MS);
+  return () => clearTimeout(timer);
+ }, [chosen]);
+ const choose = (l: PosterLocale) => { setChosen(l === locales[0] ? null : l); onInteract?.(); };
  const {strings: t, headlines, tagline} = resolvePosterText(locale, branding.copy[locale]);
  const steps = [t.step1, t.step2, t.step3, t.step4];
  const headline = useCycle(headlines.length, HEADLINE_MS);
@@ -89,6 +93,7 @@ export function KioskPoster({branding, live}: {branding: PosterBranding; live: P
    <div className="kp-poster">
     <div className="kp-bg" style={branding.backgroundUrl ? {backgroundImage: `url(${JSON.stringify(branding.backgroundUrl)})`} : undefined}/>
     <div className="kp-shade"/>
+    {locales.length > 1 && <nav className="kp-langs" aria-label="Langue · Language">{locales.map(l => <button type="button" key={l} lang={l} className={l === locale ? 'is-on' : ''} onClick={() => choose(l)}>{POSTER_LOCALES.find(p => p.locale === l)?.code}</button>)}</nav>}
 
     <section className="kp-left">
      <div className="kp-logo">
@@ -127,7 +132,6 @@ export function KioskPoster({branding, live}: {branding: PosterBranding; live: P
 
     <footer className="kp-steps">
      {steps.map((label, i) => <div key={i} className={'kp-step' + (i === step ? ' is-on' : '')}><b>{i + 1}</b>{label}</div>)}
-     {locales.length > 1 && <div className="kp-langs">{locales.map(l => <span key={l} className={l === locale ? 'is-on' : ''}>{POSTER_LOCALES.find(p => p.locale === l)?.code}</span>)}</div>}
      <span className="kp-brand">batyeo<em>.</em></span>
     </footer>
    </div>
@@ -174,10 +178,9 @@ const POSTER_CSS = `
 .kp-step b{display:grid;place-items:center;width:2cqw;height:2cqw;border-radius:50%;background:rgba(255,255,255,.15);font-size:1.1cqw}
 .kp-step.is-on{background:var(--kp-accent);color:var(--kp-primary);border-color:var(--kp-accent);transform:scale(1.05)}
 .kp-step.is-on b{background:var(--kp-primary);color:var(--kp-accent)}
-.kp-langs{margin-left:auto;display:flex;gap:.4cqw}
-.kp-langs+.kp-brand{margin-left:1.2cqw}
-.kp-langs span{font-size:1cqw;font-weight:800;padding:.3cqw .6cqw;border-radius:.5cqw;color:rgba(255,255,255,.55);transition:all .4s}
-.kp-langs span.is-on{background:#fff;color:var(--kp-primary)}
+.kp-langs{position:absolute;top:2.2cqw;right:3.2cqw;z-index:3;display:flex;gap:.5cqw;background:rgba(0,0,0,.45);padding:.45cqw;border-radius:99cqw}
+.kp-langs button{appearance:none;border:0;cursor:pointer;font:inherit;font-size:1.35cqw;font-weight:800;min-width:3.6cqw;padding:.55cqw .9cqw;border-radius:99cqw;background:transparent;color:rgba(255,255,255,.75);transition:background .3s,color .3s}
+.kp-langs button.is-on{background:var(--kp-accent);color:var(--kp-primary)}
 .kp-brand{margin-left:auto;font-size:1.8cqw;font-weight:900;letter-spacing:.02em}
 .kp-brand em{color:var(--kp-accent);font-style:normal}
 @keyframes kp-drift{from{transform:scale(1)}to{transform:scale(1.08) translate(-1%,-1%)}}
@@ -185,4 +188,45 @@ const POSTER_CSS = `
 @keyframes kp-pulse{0%,100%{transform:scale(1);opacity:.9}50%{transform:scale(1.12);opacity:1}}
 @keyframes kp-blink{0%,100%{opacity:1}50%{opacity:.25}}
 @media (prefers-reduced-motion:reduce){.kp-bg,.kp-wave,.kp-bolt,.kp-stock i{animation:none}}
+`;
+
+/** A venue's own offer, dressed in its colours. The QR stays in the corner: a promo slide never costs a rental. */
+export function KioskPromo({promo, branding, venueName, qrTarget, canRent}: {promo: PosterPromo; branding: PosterBranding; venueName: string; qrTarget: string; canRent: boolean}) {
+ const vars = {'--kp-primary': branding.primary, '--kp-accent': branding.accent} as React.CSSProperties;
+ const photo = promo.imageUrl ?? branding.backgroundUrl;
+ return (
+  <div className="kp-frame" style={vars} lang="fr-FR">
+   <style>{POSTER_CSS + PROMO_CSS}</style>
+   <div className="kp-bg" style={photo ? {backgroundImage: `url(${JSON.stringify(photo)})`} : undefined}/>
+   <div className="kpp-shade"/>
+   <div className="kpp-content">
+    <div className="kp-logo">
+     {/* eslint-disable-next-line @next/next/no-img-element */}
+     {branding.logoUrl ? <img src={branding.logoUrl} alt={venueName}/> : <span>{venueName}</span>}
+    </div>
+    <p className="kpp-title">{promo.title}</p>
+    {promo.highlight && <p className="kpp-highlight">{promo.highlight}</p>}
+    {promo.subtitle && <p className="kpp-subtitle">{promo.subtitle}</p>}
+    <p className="kpp-schedule">{promo.schedule}</p>
+   </div>
+   {canRent && <div className="kpp-corner"><div className="kpp-qr"><QRCodeSVG value={qrTarget} size={256} bgColor="#ffffff" fgColor="#0b0b0b" style={{width: '100%', height: '100%'}}/></div><span>Batterie à plat&nbsp;? Scanne&nbsp;ici</span></div>}
+   <span className="kp-brand kpp-brand">batyeo<em>.</em></span>
+  </div>
+ );
+}
+
+const PROMO_CSS = `
+.kpp-shade{position:absolute;inset:0;background:linear-gradient(90deg,color-mix(in srgb,var(--kp-primary) 92%,transparent) 0%,color-mix(in srgb,var(--kp-primary) 55%,transparent) 60%,transparent 100%)}
+.kpp-content{position:absolute;inset:0;z-index:1;display:flex;flex-direction:column;justify-content:center;gap:1.2cqw;padding:3cqw 4cqw;max-width:62cqw}
+.kpp-content .kp-logo{position:absolute;top:3cqw;left:4cqw}
+.kpp-title{margin:0;font-size:4cqw;font-weight:900;text-transform:uppercase;letter-spacing:.02em;line-height:1}
+.kpp-highlight{margin:0;font-size:8.5cqw;font-weight:900;font-style:italic;text-transform:uppercase;line-height:.95;color:var(--kp-accent);text-shadow:0 0 3cqw color-mix(in srgb,var(--kp-accent) 55%,transparent);animation:kpp-pop 2.4s ease-in-out infinite}
+.kpp-subtitle{margin:0;font-size:2.1cqw;font-weight:700;color:#f2f2f2;max-width:52cqw}
+.kpp-schedule{margin:.6cqw 0 0;align-self:flex-start;font-size:1.7cqw;font-weight:800;text-transform:uppercase;letter-spacing:.04em;background:var(--kp-accent);color:var(--kp-primary);border-radius:99cqw;padding:.6cqw 1.6cqw}
+.kpp-corner{position:absolute;right:3cqw;bottom:3cqw;z-index:2;display:flex;flex-direction:column;align-items:center;gap:.6cqw;background:rgba(0,0,0,.55);border-radius:1.4cqw;padding:1cqw}
+.kpp-qr{width:10cqw;aspect-ratio:1;background:#fff;border-radius:.8cqw;padding:.6cqw}
+.kpp-corner span{font-size:1.1cqw;font-weight:800;text-align:center;max-width:12cqw}
+.kpp-brand{position:absolute;left:4cqw;bottom:2.4cqw;z-index:2}
+@keyframes kpp-pop{0%,100%{transform:scale(1)}50%{transform:scale(1.04)}}
+@media (prefers-reduced-motion:reduce){.kpp-highlight{animation:none}}
 `;

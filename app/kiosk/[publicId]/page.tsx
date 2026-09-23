@@ -1,23 +1,24 @@
 'use client';
-import {use, useEffect, useState} from 'react';
-import {QRCodeSVG} from 'qrcode.react';
+import {use, useCallback, useEffect, useState} from 'react';
 import {useApi, type PublicData} from '@/components/batyeo/shared';
-import {euro} from '@/core/pricing';
+import {KioskPoster, KioskPromo, type PosterPromo} from '@/components/batyeo/kiosk-poster';
 import {resolveKioskStrings, type KioskStringKey, type RuntimeTranslations} from '@/core/i18n';
+import type {PosterPayload} from '@/core/screen';
 
-/** How long the price/QR screen shows before the promotional carousel takes over, when media exists. */
-const INFO_SLIDE_MS = 20_000;
-/** Nobody touches this screen, so the languages take turns instead of waiting for a tap. */
-const LOCALE_ROTATION_MS = 10_000;
+/** The poster is the resting screen; promos and BATYEO media only ever interrupt it briefly. */
+const POSTER_MS = 20_000;
+/** Someone touched the screen: they are reading or about to scan, so nothing rotates away under them. */
+const TOUCH_HOLD_MS = 60_000;
 
 interface KioskMediaItem {id: string; kind: 'IMAGE' | 'VIDEO'; uri: string; durationMs: number}
-interface KioskDisplayConfig {venueName: string; idleContent: string; maintenanceBanner: string | null; refreshIntervalMs: number; playlist: KioskMediaItem[]}
+interface KioskDisplayConfig {venueName: string; idleContent: string; maintenanceBanner: string | null; refreshIntervalMs: number; playlist: KioskMediaItem[]; poster: PosterPayload | null}
+type Slide = {kind: 'poster'} | {kind: 'promo'; promo: PosterPromo & {durationMs: number}} | {kind: 'media'; item: KioskMediaItem};
 
 // A fixed-size, self-hosted kiosk screen — not a page asset Next.js needs to optimize.
-function PromoMedia({item}: {item: {id: string; kind: 'IMAGE' | 'VIDEO'; uri: string}}) {
- if (item.kind === 'VIDEO') return <video key={item.id} src={item.uri} autoPlay muted playsInline style={styles.promoMedia} />;
+function PromoMedia({item}: {item: KioskMediaItem}) {
+ if (item.kind === 'VIDEO') return <video key={item.id} src={item.uri} autoPlay muted playsInline style={styles.media} />;
  // eslint-disable-next-line @next/next/no-img-element
- return <img key={item.id} src={item.uri} alt="" style={styles.promoMedia} />;
+ return <img key={item.id} src={item.uri} alt="" style={styles.media} />;
 }
 
 export default function KioskPage({params}: {params: Promise<{publicId: string}>}) {
@@ -27,104 +28,51 @@ export default function KioskPage({params}: {params: Promise<{publicId: string}>
  const {data: translationData} = useApi<{locale: string; translations: RuntimeTranslations | null}>('translations/' + publicId);
  const station = data?.stations.find(s => s.publicId === publicId);
  const qrTarget = typeof window !== 'undefined' ? `${window.location.origin}/rent/${encodeURIComponent(publicId)}` : `/rent/${encodeURIComponent(publicId)}`;
+ const strings = resolveKioskStrings(translationData?.translations ?? null, translationData?.locale ?? 'fr-FR');
+ const t = (key: KioskStringKey, vars?: Record<string, string>) => Object.entries(vars ?? {}).reduce((text, [name, value]) => text.replaceAll(`{${name}}`, value), strings[key]);
 
- // A station with no configured translations keeps exactly one locale — the rotation below is then inert.
- const translations = translationData?.translations ?? null;
- const locales = translations?.available.length ? translations.available.map(l => l.locale) : [translationData?.locale ?? 'fr-FR'];
- const [localeIndex, setLocaleIndex] = useState(0);
+ // Poster between every interruption: poster, promo, poster, video… so the QR is never away for long.
+ const extras: Slide[] = [...(display?.poster?.promos ?? []).map(promo => ({kind: 'promo' as const, promo})), ...(display?.playlist ?? []).map(item => ({kind: 'media' as const, item}))];
+ const slides: Slide[] = extras.length ? extras.flatMap(extra => [{kind: 'poster' as const}, extra]) : [{kind: 'poster'}];
+ const [index, setIndex] = useState(0);
+ const [holdUntil, setHoldUntil] = useState(0);
+ const slide = slides[index % slides.length];
+ const slideMs = slide.kind === 'poster' ? POSTER_MS : slide.kind === 'promo' ? slide.promo.durationMs : slide.item.durationMs;
  useEffect(() => {
-  if (locales.length < 2) return;
-  const timer = setInterval(() => setLocaleIndex(prev => (prev + 1) % locales.length), LOCALE_ROTATION_MS);
-  return () => clearInterval(timer);
- }, [locales.length]);
- const strings = resolveKioskStrings(translations, locales[localeIndex % locales.length]);
- const t = (key: KioskStringKey, vars?: Record<string, string>) => {
-  let value = strings[key];
-  if (vars) for (const [name, replacement] of Object.entries(vars)) value = value.replaceAll(`{${name}}`, replacement);
-  return value;
- };
-
- // -1 = the price/QR screen; 0..n-1 = an index into the promotional playlist.
- const [slide, setSlide] = useState(-1);
- const playlist = display?.playlist ?? [];
- useEffect(() => {
-  if (!playlist.length) return;
-  const duration = slide === -1 ? INFO_SLIDE_MS : (playlist[slide]?.durationMs ?? INFO_SLIDE_MS);
-  const timer = setTimeout(() => setSlide(prev => { const next = prev + 1; return next >= playlist.length ? -1 : next; }), duration);
+  if (slides.length < 2) return;
+  const wait = Math.max(slideMs, holdUntil - Date.now());
+  const timer = setTimeout(() => setIndex(i => (i + 1) % slides.length), wait);
   return () => clearTimeout(timer);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
- }, [slide, playlist.length]);
- // Out-of-range once the playlist shrinks (or is empty) simply falls back to the info screen — no extra state to keep in sync.
- const promo = playlist.length ? playlist[slide] : undefined;
+ }, [index, slides.length, slideMs, holdUntil]);
+ const hold = useCallback(() => { setIndex(i => i - (i % slides.length)); setHoldUntil(Date.now() + TOUCH_HOLD_MS); }, [slides.length]);
+
+ const poster = display?.poster;
+ const canRent = !!station?.online && (station?.available ?? 0) > 0;
 
  return (
-  <main style={styles.screen}>
-   <style>{KIOSK_CSS}</style>
+  <main style={styles.screen} onPointerDown={slide.kind === 'poster' ? undefined : hold}>
    {display?.maintenanceBanner && <div style={styles.banner}>{display.maintenanceBanner}</div>}
    {loading && <p style={styles.status}>{t('kiosk_loading')}</p>}
    {!loading && error && <p style={styles.error}>{t('kiosk_connectionLost')}</p>}
    {!loading && !error && !station && <p style={styles.error}>{t('kiosk_stationNotFound', {publicId})}</p>}
-   {station && promo && (
-    <div className="kiosk-promo">
-     <PromoMedia item={promo} />
-     {station.online && <div className="kiosk-corner-qr" style={styles.cornerQr}>
-      <QRCodeSVG value={qrTarget} size={96} bgColor="#f7f8f2" fgColor="#19382c" />
-      <span style={styles.cornerLabel}>{t('kiosk_scanToRent')}</span>
-     </div>}
-    </div>
-   )}
-   {station && !promo && (
-    <div className="kiosk-layout">
-     <div className="kiosk-info">
-      <p style={styles.eyebrow}>batyeo<span style={styles.dot}>.</span></p>
-      <h1 style={styles.title}>{station.venue.name}</h1>
-      <p style={styles.subtitle}>{station.venue.city}</p>
-      {display?.idleContent && <p style={styles.idleContent}>{display.idleContent}</p>}
-      <div style={styles.badge(station.online)}>{t(station.online ? 'kiosk_online' : 'kiosk_offline')}</div>
-      {station.online && <p style={styles.count}>{station.available > 0 ? t('kiosk_available', {count: String(station.available), plural: station.available > 1 ? 's' : ''}) : t('kiosk_allRented')}</p>}
-      {station.online && data?.pricing && <p style={styles.price}>{t('kiosk_price', {hourly: euro(data.pricing.hourlyCents), cap: euro(data.pricing.capCents)})}<br/>{t('kiosk_deposit', {deposit: euro(data.pricing.depositCents)})}</p>}
-      {station.online && <ol style={styles.steps}><li>{t('kiosk_step1')}</li><li>{t('kiosk_step2')}</li><li>{t('kiosk_step3')}</li><li>{t('kiosk_step4')}</li></ol>}
-      {!station.online && <p style={styles.error}>{t('kiosk_unavailable')}</p>}
-     </div>
-     {station.online && <div className="kiosk-qr">
-      <div style={styles.qrCard}>
-       <QRCodeSVG value={qrTarget} size={260} bgColor="#f7f8f2" fgColor="#19382c" />
-      </div>
-      <p style={styles.instructions}>{t('kiosk_scanInstructions')}</p>
-     </div>}
+   {station && poster && data && (
+    <div style={styles.stage}>
+     {slide.kind === 'poster' && <KioskPoster branding={poster.branding} onInteract={hold} live={{venueName: poster.venueName, city: station.venue.city, online: station.online, available: station.available, hourlyCents: data.pricing.hourlyCents, capCents: data.pricing.capCents, depositCents: data.pricing.depositCents, qrTarget}}/>}
+     {slide.kind === 'promo' && <KioskPromo promo={slide.promo} branding={poster.branding} venueName={poster.venueName} qrTarget={qrTarget} canRent={canRent}/>}
+     {slide.kind === 'media' && <div style={styles.mediaFrame}><PromoMedia item={slide.item}/></div>}
     </div>
    )}
   </main>
  );
 }
 
-// Cabinet screens are landscape and cannot scroll: two columns keep the QR, the price and the steps all on screen at once.
-const KIOSK_CSS = `
-.kiosk-layout{display:flex;flex-direction:column;align-items:center;gap:20px}
-.kiosk-info,.kiosk-qr{display:flex;flex-direction:column;align-items:center;gap:12px}
-.kiosk-promo{position:absolute;inset:0;background:#000}
-@media (orientation:landscape){
- .kiosk-layout{flex-direction:row;justify-content:center;gap:64px;width:100%}
- .kiosk-info{align-items:flex-start;text-align:left;max-width:520px}
-}`;
-
+// The cabinet screen is landscape and cannot scroll: the 16:9 stage is letterboxed to fit whatever panel it runs on.
 const styles = {
- screen: {minHeight: '100vh', width: '100%', position: 'relative' as const, display: 'flex', flexDirection: 'column' as const, alignItems: 'center', justifyContent: 'center', gap: 20, background: '#19382c', color: '#f4f6ee', padding: 32, textAlign: 'center' as const, fontFamily: 'system-ui, sans-serif'},
+ screen: {height: '100vh', width: '100vw', overflow: 'hidden', position: 'relative' as const, display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#000', color: '#f4f6ee', fontFamily: 'system-ui, sans-serif', textAlign: 'center' as const},
+ stage: {width: 'min(100vw, calc(100vh * 16 / 9))'},
+ mediaFrame: {width: '100%', aspectRatio: '16 / 9', background: '#000'},
+ media: {width: '100%', height: '100%', objectFit: 'cover' as const},
  status: {fontSize: 22, color: '#d8ed98'},
  error: {fontSize: 22, color: '#ffd7d0', maxWidth: 480},
- eyebrow: {fontSize: 20, fontWeight: 800, margin: 0},
- dot: {color: '#d8ed98'},
- title: {fontSize: 44, fontWeight: 700, margin: 0, lineHeight: 1.1},
- subtitle: {fontSize: 22, color: '#c7d3c2', margin: 0},
- idleContent: {fontSize: 18, color: '#d8ed98', margin: 0, maxWidth: 480},
- count: {fontSize: 26, fontWeight: 600, margin: 0},
- qrCard: {background: '#f7f8f2', borderRadius: 24, padding: 20},
- price: {fontSize: 20, fontWeight: 600, margin: 0, maxWidth: 520, color: '#d8ed98'},
- steps: {display: 'flex', flexDirection: 'column' as const, gap: 6, listStyle: 'none', padding: 0, margin: 0, fontSize: 17, color: '#c7d3c2'},
- instructions: {fontSize: 18, color: '#c7d3c2', maxWidth: 420, margin: 0},
- badge: (online: boolean) => ({padding: '8px 20px', borderRadius: 999, fontSize: 16, fontWeight: 700, background: online ? '#d8ed98' : '#e7a99c', color: '#19382c'}),
- banner: {position: 'absolute' as const, top: 0, left: 0, right: 0, background: 'rgba(157,63,53,0.9)', color: '#fff', padding: '14px 24px', fontSize: 16, fontWeight: 600, zIndex: 10},
- promoMedia: {width: '100%', height: '100%', objectFit: 'cover' as const},
- cornerQr: {position: 'absolute' as const, bottom: 24, right: 24, background: '#f7f8f2', borderRadius: 16, padding: 12, display: 'flex', flexDirection: 'column' as const, alignItems: 'center', gap: 6},
- cornerLabel: {fontSize: 12, fontWeight: 700, color: '#19382c'},
+ banner: {position: 'absolute' as const, top: 0, left: 0, right: 0, background: 'rgba(157,63,53,0.92)', color: '#fff', padding: '14px 24px', fontSize: 18, fontWeight: 700, zIndex: 10},
 };

@@ -21,3 +21,4 @@
 .rental-contact input{width:100%;padding:12px 14px;border:1px solid #d8e0cd;border-radius:8px;font:inherit;background:#fff}
 .rental-contact input:focus-visible{outline:2px solid #6f8a55;outline-offset:1px}
 .card-element{margin:18px 0;min-height:140px;text-align:left}
+.screen-studio{display:flex;flex-direction:column;gap:14px;margin-top:14px}.screen-preview{border-radius:12px;overflow:hidden;box-shadow:0 10px 30px rgba(0,0,0,.18);margin-bottom:6px}.text-area{width:100%;border:1px solid var(--border);border-radius:8px;padding:8px 10px;font:inherit;font-size:14px;background:var(--background);color:var(--foreground);resize:vertical}fieldset.field-label{border:0;padding:0;margin:0;min-width:0}fieldset.field-label legend{padding:0;margin-bottom:6px}[data-slot=dialog-content].dialog-wide{max-width:min(760px,calc(100vw - 32px));max-height:calc(100vh - 32px);overflow-y:auto}

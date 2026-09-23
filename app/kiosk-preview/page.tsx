@@ -1,8 +1,9 @@
 'use client';
 import {useState} from 'react';
-import {KioskPoster, POSTER_THEMES, type PosterBranding} from '@/components/batyeo/kiosk-poster';
+import {KioskPoster, KioskPromo, POSTER_THEMES, type PosterBranding} from '@/components/batyeo/kiosk-poster';
 import {POSTER_LOCALES, POSTER_STRINGS, type PosterCopy, type PosterLocale} from '@/core/poster-i18n';
 import {DEFAULT_PRICING} from '@/core/pricing';
+import type {PosterTheme} from '@/core/screen';
 
 // Files picked here stay in this browser (object URLs): nothing is uploaded while BATYEO tries a design.
 function pickFile(onPick: (url: string | null) => void) {
@@ -13,7 +14,7 @@ function pickFile(onPick: (url: string | null) => void) {
 }
 
 export default function KioskPreviewPage() {
- const [theme, setTheme] = useState('sport');
+ const [theme, setTheme] = useState<PosterTheme>('sport');
  const [venueName, setVenueName] = useState('Le Comptoir');
  const [logoUrl, setLogoUrl] = useState<string | null>(null);
  const [backgroundUrl, setBackgroundUrl] = useState<string | null>(null);
@@ -22,6 +23,7 @@ export default function KioskPreviewPage() {
  const [copy, setCopy] = useState<Partial<Record<PosterLocale, PosterCopy>>>({});
  const [available, setAvailable] = useState(4);
  const [online, setOnline] = useState(true);
+ const [promo, setPromo] = useState({title: 'Happy hour', highlight: 'Pinte à 5 €', subtitle: 'Toutes les pintes et les cocktails maison', schedule: 'Lun–Ven · 18h–20h'});
 
  const defaults = POSTER_STRINGS[editLocale];
  const edited = copy[editLocale] ?? {headlines: [], tagline: ''};
@@ -37,9 +39,16 @@ export default function KioskPreviewPage() {
  return (
   <main style={styles.page}>
    <div style={styles.poster}><KioskPoster branding={branding} live={live}/></div>
+   <div style={styles.poster}><KioskPromo promo={{id: 'apercu', imageUrl: null, ...promo}} branding={branding} venueName={venueName} qrTarget={live.qrTarget} canRent={online && available > 0}/></div>
+   <form style={styles.panel} onSubmit={e => e.preventDefault()}>
+    <label style={styles.field}>Promo · titre<input value={promo.title} onChange={e => setPromo({...promo, title: e.target.value})} style={styles.input}/></label>
+    <label style={styles.field}>Promo · en grand<input value={promo.highlight} onChange={e => setPromo({...promo, highlight: e.target.value})} style={styles.input}/></label>
+    <label style={styles.field}>Promo · détail<input value={promo.subtitle} onChange={e => setPromo({...promo, subtitle: e.target.value})} style={styles.input}/></label>
+    <label style={styles.field}>Promo · horaires<input value={promo.schedule} onChange={e => setPromo({...promo, schedule: e.target.value})} style={styles.input}/></label>
+   </form>
    <form style={styles.panel} onSubmit={e => e.preventDefault()}>
     <label style={styles.field}>Style
-     <select value={theme} onChange={e => setTheme(e.target.value)} style={styles.input}>
+     <select value={theme} onChange={e => setTheme(e.target.value as PosterTheme)} style={styles.input}>
       {Object.entries(POSTER_THEMES).map(([key, t]) => <option key={key} value={key}>{t.label}</option>)}
      </select>
     </label>
@@ -47,7 +56,7 @@ export default function KioskPreviewPage() {
     <label style={styles.field}>Logo du bar<input type="file" accept="image/*" onChange={pickFile(setLogoUrl)} style={{maxWidth: '100%'}}/></label>
     <label style={styles.field}>Photo de fond<input type="file" accept="image/*" onChange={pickFile(setBackgroundUrl)} style={{maxWidth: '100%'}}/></label>
     <fieldset style={styles.fieldset}>
-     <legend style={styles.legend}>Langues affichées (elles défilent toutes les 10 s)</legend>
+     <legend style={styles.legend}>Langues proposées (le client touche la sienne, français par défaut)</legend>
      <div style={styles.checks}>
       {POSTER_LOCALES.map(l => <label key={l.locale} style={styles.check}><input type="checkbox" checked={locales.includes(l.locale)} onChange={e => toggleLocale(l.locale, e.target.checked)}/>{l.label}</label>)}
      </div>
