@@ -58,23 +58,20 @@ test('Customer support ticket is linked server-side to the rental context',async
 test('Signed Stripe webhook is persisted once and duplicate delivery is acknowledged',async()=>{const repo=new MemoryRepository(seedData('unused'));const secret='whsec_test';const previous=process.env.STRIPE_WEBHOOK_SECRET;process.env.STRIPE_WEBHOOK_SECRET=secret;try{const timestamp=Math.floor(Date.now()/1000);const payload=JSON.stringify({id:'evt_test_1',type:'payment_intent.succeeded',created:timestamp,data:{object:{id:'pi_test'}}});const key=await crypto.subtle.importKey('raw',new TextEncoder().encode(secret),{name:'HMAC',hash:'SHA-256'},false,['sign']);const signed=await crypto.subtle.sign('HMAC',key,new TextEncoder().encode(`${timestamp}.${payload}`));const signature=Array.from(new Uint8Array(signed)).map(value=>value.toString(16).padStart(2,'0')).join('');const api=createApi(repo,{demo:true,allowLegacyCredentials:true});const request=()=>new Request('https://batyeo.test/api/core/stripe/webhook',{method:'POST',headers:{'content-type':'application/json','stripe-signature':`t=${timestamp},v1=${signature}`},body:payload});assert.equal((await api.POST(request(),{params:Promise.resolve({path:['stripe','webhook']})})).status,200);assert.equal((await api.POST(request(),{params:Promise.resolve({path:['stripe','webhook']})})).status,200);assert.equal(repo.data.webhookEvents.length,1);}finally{if(previous===undefined)delete process.env.STRIPE_WEBHOOK_SECRET;else process.env.STRIPE_WEBHOOK_SECRET=previous;}});
 test('Financial and state injection on rental start is rejected before mutation',async()=>{const repo=new MemoryRepository(seedData('unused'));const count=repo.data.rentals.length;for(const field of ['state','amountCents','pricing','depositCents','partnerId']){const response=await call(repo,'start',{stationPublicId:'paris-demo',termsAccepted:true,idempotencyKey:crypto.randomUUID(),[field]:'forged'});assert.equal(response.status,400);}assert.equal(repo.data.rentals.length,count);});
 test('Invariant layer catches money corruption and orphan/cross-tenant data',()=>{for(const corrupt of [(d:Data)=>{d.payments[0].capturedCents=99999;},(d:Data)=>{d.stations[0].partnerId='partner-b';},(d:Data)=>{d.slots[0].batteryId='missing';},(d:Data)=>{d.rentals[0].commissionCents=99;}]){const d=seedData('unused');corrupt(d);assert.throws(()=>validateData(d));}});
-test('Media creation, publish and archive are scoped to the partner’s own stations',async()=>{
+test('Only BATYEO staff change what a kiosk screen shows — a partner admin cannot touch media, idle text or translations, even on their own station',async()=>{
  const {repo,token}=await authenticated('PARTNER_ADMIN');
- const crossTenant=await call(repo,'media/create',{name:'Pub concurrente',kind:'IMAGE',uri:'https://cdn.test/ad.png',durationMs:5000,targetStationIds:['station-lille']},token);
- assert.equal(crossTenant.status,404);
- assert.equal(repo.data.media.length,0);
- const broadcast=await call(repo,'media/create',{name:'Pub globale',kind:'IMAGE',uri:'https://cdn.test/ad.png',durationMs:5000},token);
- assert.equal(broadcast.status,400);
- const created=await call(repo,'media/create',{name:'Pub partenaire',kind:'IMAGE',uri:'https://cdn.test/ad.png',durationMs:5000,targetStationIds:['station-paris']},token);
- assert.equal(created.status,201);
- const {media}=await created.json() as {media:{id:string}};
- const otherUser=repo.data.users.find(u=>u.role==='PARTNER_ADMIN'&&u.partnerId==='partner-b')!;
- const otherToken=crypto.randomUUID()+crypto.randomUUID();const otherDigest=await sha256(otherToken);
- repo.data.sessions.push({id:otherDigest,userId:otherUser.id,expiresAt:Date.now()+100000,authVersion:0});
- assert.equal((await call(repo,'media/publish',{id:media.id},otherToken)).status,404);
- assert.equal(repo.data.media.find(m=>m.id===media.id)?.status,'DRAFT');
- assert.equal((await call(repo,'media/publish',{id:media.id},token)).status,200);
- assert.equal(repo.data.media.find(m=>m.id===media.id)?.status,'PUBLISHED');
+ repo.data.media.push({id:'m1',name:'Pub BATYEO',kind:'IMAGE',uri:'https://cdn.test/ad.png',checksum:'x',durationMs:5000,status:'DRAFT',startsAt:null,endsAt:null,targetStationIds:['station-paris'],createdAt:1,updatedAt:1});
+ const attempts:[string,unknown][]=[
+  ['media/create',{name:'Pub du bar',kind:'IMAGE',uri:'https://cdn.test/ad.png',durationMs:5000,targetStationIds:['station-paris']}],
+  ['media/publish',{id:'m1'}],
+  ['display/config',{stationId:'station-paris',idleContent:'Happy hour',supportContact:'',maintenanceBanner:null,locale:'fr-FR',refreshIntervalMs:15000}],
+  ['display/translations',{stationIds:['station-paris'],defaultLocale:'fr-FR',available:[{code:'fr',label:'Français',locale:'fr-FR'}],strings:{}}],
+ ];
+ for(const [path,body] of attempts)assert.equal((await call(repo,path,body,token)).status,403,path);
+ assert.equal(repo.data.media.length,1);
+ assert.equal(repo.data.media[0].status,'DRAFT');
+ const admin=await authenticated('ADMIN');
+ assert.equal((await call(admin.repo,'media/create',{name:'Pub BATYEO',kind:'IMAGE',uri:'https://cdn.test/ad.png',durationMs:5000,targetStationIds:['station-paris']},admin.token)).status,201);
 });
 test('Finance-only payment details and commissions are not leaked through rental projections',async()=>{const {repo,token}=await authenticated('SUPPORT');const response=await call(repo,'dashboard',undefined,token);const body=await response.json() as {payments:unknown[];rentals:Record<string,unknown>[]};assert.equal(body.payments.length,0);assert.ok(body.rentals.every(r=>!('payment' in r)&&!('commissionCents' in r)));const id=repo.data.rentals[0].id;const detail=await call(repo,'rentals/'+id,undefined,token);const row=await detail.json() as Record<string,unknown>;assert.equal('payment' in row,false);assert.equal('commissionCents' in row,false);});
 

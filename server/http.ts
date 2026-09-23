@@ -523,7 +523,7 @@ async function route(request:Request,path:string){
   }));
  }
  if(path==='media/upload-token'){
-  authorize(actor,'settings');
+  authorize(actor,'screen');
   const handler=dependencies.handleMediaUpload??handleUpload;
   let jsonResponse:Awaited<ReturnType<typeof handleUpload>>;
   try{
@@ -539,32 +539,24 @@ async function route(request:Request,path:string){
   return reply(jsonResponse);
  }
  if(path==='media/create'){
-  authorize(actor,'settings');
+  authorize(actor,'screen');
   const input=z.object({name:z.string().trim().min(1).max(120),kind:z.enum(['IMAGE','VIDEO']),uri:z.string().url(),durationMs:z.number().int().min(1000).max(86_400_000),startsAt:z.number().int().nullable().optional(),endsAt:z.number().int().nullable().optional(),targetStationIds:z.array(id).max(200).optional(),checksum:z.string().trim().min(1).max(200).optional()}).strict().parse(body);
-  return reply(await write('settings',(d,current)=>{
-   if(current.role==='PARTNER_ADMIN'){
-    if(!input.targetStationIds?.length)throw new DomainError('Sélectionnez au moins une station de votre établissement.',400);
-    for(const stationId of input.targetStationIds){const station=d.stations.find(s=>s.id===stationId);if(!station)throw new DomainError('Station cible introuvable.',404);assertTenant(current,station.partnerId);}
-   }
+  return reply(await write('screen',(d,current)=>{
    const item=createMedia(d,input);audit(d,current,`Média créé · ${item.name}`);return {media:item};
   }),201);
  }
  if(path==='media/publish'||path==='media/archive'){
-  authorize(actor,'settings');
+  authorize(actor,'screen');
   const input=z.object({id}).strict().parse(body);
-  return reply(await write('settings',(d,current)=>{
+  return reply(await write('screen',(d,current)=>{
    const existing=d.media.find(m=>m.id===input.id);if(!existing)throw new DomainError('Média introuvable.',404);
-   if(current.role==='PARTNER_ADMIN'){
-    if(!existing.targetStationIds.length)throw new DomainError('Média introuvable.',404);
-    for(const stationId of existing.targetStationIds){const station=d.stations.find(s=>s.id===stationId);if(!station)throw new DomainError('Station cible introuvable.',404);assertTenant(current,station.partnerId);}
-   }
    const item=setMediaStatus(d,input.id,path==='media/publish'?'PUBLISHED':'ARCHIVED');audit(d,current,`Média ${path==='media/publish'?'publié':'archivé'} · ${item.name}`);return {media:item};
   }));
  }
  if(path==='display/config'){
-  authorize(actor,'settings');
+  authorize(actor,'screen');
   const input=z.object({stationId:id,idleContent:z.string().max(2000),supportContact:z.string().max(200),maintenanceBanner:z.string().max(500).nullable(),locale:z.string().min(2).max(20),refreshIntervalMs:z.number().int().min(5000).max(600_000),featureFlags:z.record(z.boolean()).optional()}).strict().parse(body);
-  return reply(await write('settings',(d,current)=>{
+  return reply(await write('screen',(d,current)=>{
    const station=d.stations.find(s=>s.id===input.stationId);if(!station)throw new DomainError('Station introuvable.',404);
    assertTenant(current,station.partnerId);
    const existing=d.displayConfigs.find(row=>row.stationId===input.stationId);
@@ -666,9 +658,9 @@ async function route(request:Request,path:string){
   }));
  }
  if(path==='display/translations'){
-  authorize(actor,'settings');
+  authorize(actor,'screen');
   const input=z.object({stationIds:z.array(id).min(1).max(200),defaultLocale:z.string().min(2).max(20),available:z.array(z.object({code:z.string().min(1).max(10),label:z.string().min(1).max(60),locale:z.string().min(2).max(20)})).min(1).max(40),strings:z.record(z.record(z.string().max(2000)))}).strict().parse(body);
-  return reply(await write('settings',(d,current)=>{
+  return reply(await write('screen',(d,current)=>{
    const translations=validateTranslations({defaultLocale:input.defaultLocale,available:input.available,strings:input.strings});
    const updated:string[]=[];
    for(const stationId of input.stationIds){

@@ -8,9 +8,9 @@ export const OPEN_STATES:RentalState[]=['CREATED','PAYMENT_AUTH','EJECTING','ACT
 /** Batterie jamais restituée : au-delà de ce délai après le retard, la caution est capturée en intégralité et la location est classée comme perte définitive. */
 export const OVERDUE_LOSS_GRACE_MS=48*3_600_000;
 export function overdueLossEligible(r:Rental,now=Date.now()):boolean {return r.state==='OVERDUE'&&r.deadline!==null&&now+r.simulatedMinutes*60_000-r.deadline>=OVERDUE_LOSS_GRACE_MS;}
-export function authorize(actor:Actor|undefined,capability:'read'|'operate'|'finance'|'support'|'settings'|'pricing') {
+export function authorize(actor:Actor|undefined,capability:'read'|'operate'|'finance'|'support'|'settings'|'pricing'|'screen') {
  if(!actor)throw new DomainError('Veuillez vous connecter.',401);
- const permissions={read:['SUPER_ADMIN','ADMIN','OPERATIONS','FINANCE','SUPPORT','PARTNER_ADMIN','PARTNER_USER'],operate:['SUPER_ADMIN','ADMIN','OPERATIONS'],finance:['SUPER_ADMIN','ADMIN','FINANCE','PARTNER_ADMIN'],support:['SUPER_ADMIN','ADMIN','OPERATIONS','SUPPORT','PARTNER_ADMIN','PARTNER_USER'],settings:['SUPER_ADMIN','ADMIN','PARTNER_ADMIN'],pricing:['SUPER_ADMIN','ADMIN','FINANCE']};
+ const permissions={read:['SUPER_ADMIN','ADMIN','OPERATIONS','FINANCE','SUPPORT','PARTNER_ADMIN','PARTNER_USER'],operate:['SUPER_ADMIN','ADMIN','OPERATIONS'],finance:['SUPER_ADMIN','ADMIN','FINANCE','PARTNER_ADMIN'],support:['SUPER_ADMIN','ADMIN','OPERATIONS','SUPPORT','PARTNER_ADMIN','PARTNER_USER'],settings:['SUPER_ADMIN','ADMIN','PARTNER_ADMIN'],pricing:['SUPER_ADMIN','ADMIN','FINANCE'],screen:['SUPER_ADMIN','ADMIN']};
  if(!permissions[capability].includes(actor.role))throw new DomainError('Accès non autorisé.',403);
 }
 export function inTenant(actor:Actor,partnerId:string|null):boolean {return !actor.role.startsWith('PARTNER_')|| (!!actor.partnerId&&actor.partnerId===partnerId);}
