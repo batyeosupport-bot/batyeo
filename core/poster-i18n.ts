@@ -15,7 +15,7 @@ export const POSTER_LOCALES=[
 ] as const;
 export type PosterLocale=typeof POSTER_LOCALES[number]['locale'];
 
-export const POSTER_STRING_KEYS=['perHour','capDay','deposit','scan','availableOne','availableMany','allRented','offline','charging','charged','step1','step2','step3','step4','headline1','headline2','headline3','tagline'] as const;
+export const POSTER_STRING_KEYS=['perHour','capDay','deposit','scan','availableOne','availableMany','allRented','offline','charging','charged','step1','step2','step3','step4','headline1','headline2','headline3','tagline','accept'] as const;
 export type PosterStringKey=typeof POSTER_STRING_KEYS[number];
 
 export const POSTER_STRINGS:Readonly<Record<PosterLocale,Readonly<Record<PosterStringKey,string>>>>={
@@ -26,6 +26,7 @@ export const POSTER_STRINGS:Readonly<Record<PosterLocale,Readonly<Record<PosterS
   charging:'Recharge en cours…',charged:'Rechargé. Profite de la soirée.',
   step1:'Scanne le QR',step2:'Paie sur ton téléphone',step3:'Prends une batterie',step4:'Rends-la dans n’importe quelle borne',
   headline1:'Batterie à plat ?',headline2:'Reste encore un peu.',headline3:'La soirée continue.',tagline:'Recharge ton téléphone sans quitter ta table.',
+  accept:'Paiement accepté',
  },
  'en-GB':{
   perHour:'per hour',capDay:'max\nper day',deposit:'refundable\ndeposit',scan:'Scan to rent',
@@ -34,6 +35,7 @@ export const POSTER_STRINGS:Readonly<Record<PosterLocale,Readonly<Record<PosterS
   charging:'Charging…',charged:'Fully charged. Enjoy your night.',
   step1:'Scan the QR code',step2:'Pay on your phone',step3:'Grab a battery',step4:'Return it to any station',
   headline1:'Dead phone?',headline2:'Don’t leave yet.',headline3:'Keep the night going.',tagline:'Charge your phone without leaving your table.',
+  accept:'We accept',
  },
  'es-ES':{
   perHour:'la hora',capDay:'máximo\nal día',deposit:'de fianza\nreembolsable',scan:'Escanea para alquilar',
@@ -42,6 +44,7 @@ export const POSTER_STRINGS:Readonly<Record<PosterLocale,Readonly<Record<PosterS
   charging:'Cargando…',charged:'Carga completa. Disfruta de la noche.',
   step1:'Escanea el QR',step2:'Paga con tu móvil',step3:'Coge una batería',step4:'Devuélvela en cualquier estación',
   headline1:'¿Sin batería?',headline2:'No te vayas todavía.',headline3:'Que siga la noche.',tagline:'Carga tu móvil sin levantarte de la mesa.',
+  accept:'Aceptamos',
  },
  'it-IT':{
   perHour:'all’ora',capDay:'massimo\nal giorno',deposit:'di cauzione\nrimborsabile',scan:'Scansiona per noleggiare',
@@ -50,6 +53,7 @@ export const POSTER_STRINGS:Readonly<Record<PosterLocale,Readonly<Record<PosterS
   charging:'In carica…',charged:'Carica completa. Goditi la serata.',
   step1:'Scansiona il QR',step2:'Paga dal telefono',step3:'Prendi una batteria',step4:'Restituiscila in qualsiasi stazione',
   headline1:'Telefono scarico?',headline2:'Non andartene ancora.',headline3:'La serata continua.',tagline:'Ricarica il telefono senza lasciare il tavolo.',
+  accept:'Accettiamo',
  },
  'de-DE':{
   perHour:'pro Stunde',capDay:'maximal\npro Tag',deposit:'Kaution,\nwird erstattet',scan:'Scannen & ausleihen',
@@ -58,6 +62,7 @@ export const POSTER_STRINGS:Readonly<Record<PosterLocale,Readonly<Record<PosterS
   charging:'Wird geladen…',charged:'Voll geladen. Genieß den Abend.',
   step1:'QR-Code scannen',step2:'Am Handy bezahlen',step3:'Powerbank nehmen',step4:'An jeder Station zurückgeben',
   headline1:'Akku leer?',headline2:'Bleib noch ein bisschen.',headline3:'Der Abend geht weiter.',tagline:'Lade dein Handy, ohne den Tisch zu verlassen.',
+  accept:'Wir akzeptieren',
  },
  'pt-PT':{
   perHour:'por hora',capDay:'máximo\npor dia',deposit:'de caução\nreembolsável',scan:'Digitaliza para alugar',
@@ -66,6 +71,7 @@ export const POSTER_STRINGS:Readonly<Record<PosterLocale,Readonly<Record<PosterS
   charging:'A carregar…',charged:'Carga completa. Aproveita a noite.',
   step1:'Digitaliza o QR',step2:'Paga no telemóvel',step3:'Leva uma bateria',step4:'Devolve em qualquer estação',
   headline1:'Bateria em baixo?',headline2:'Fica mais um pouco.',headline3:'A noite continua.',tagline:'Carrega o telemóvel sem sair da mesa.',
+  accept:'Aceitamos',
  },
  'zh-CN':{
   perHour:'每小时',capDay:'每日\n封顶',deposit:'押金\n可退还',scan:'扫码租借',
@@ -74,6 +80,7 @@ export const POSTER_STRINGS:Readonly<Record<PosterLocale,Readonly<Record<PosterS
   charging:'充电中…',charged:'已充满，尽情享受今晚。',
   step1:'扫描二维码',step2:'手机支付',step3:'取出充电宝',step4:'任意站点归还',
   headline1:'手机没电了？',headline2:'别急着走。',headline3:'让今晚继续。',tagline:'不离开座位，也能给手机充电。',
+  accept:'支持支付',
  },
 };
 
