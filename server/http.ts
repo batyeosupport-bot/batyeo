@@ -22,6 +22,7 @@ import {validateTranslations} from '../core/i18n';
 import type {Actor,Data,StationHeartbeatRecord} from '../core/types';
 import {createStation,createVenue,updateVenue,publicQrUrl,setStripeTerminalLocation,blockStationRentals,unblockStationRentals,archiveStation,restoreStation,relocateStation,setPartnerCommission,createPartner,adoptProviderInventory,setBatteryService} from '../core/station-admin';
 import {createMedia,setMediaStatus} from '../core/media-admin';
+import {ALL_POSTER_LOCALES,POSTER_THEME_KEYS,posterFor,savePromo,setPromoStatus,setVenueBranding,type PosterTheme,type Weekday} from '../core/screen';
 import {purgeSettledWebhookEvents} from '../core/retention';
 import {COMMISSION_TIERS_BPS} from '../core/pricing';
 import {handleUpload,type HandleUploadBody} from '@vercel/blob/client';
@@ -211,7 +212,7 @@ async function route(request:Request,path:string){
   // Terminal location id or anything else runtime/config exposes only to a credentialed device.
   if(path.startsWith('display/')){
    const config=displayConfigFor(d,path.split('/')[1]);
-   return reply({venueName:config.venueName,idleContent:config.idleContent,maintenanceBanner:config.maintenanceBanner,refreshIntervalMs:config.refreshIntervalMs,playlist:config.playlist?.items??[]});
+   return reply({venueName:config.venueName,idleContent:config.idleContent,maintenanceBanner:config.maintenanceBanner,refreshIntervalMs:config.refreshIntervalMs,playlist:config.playlist?.items??[],poster:posterFor(d,path.split('/')[1])});
   }
   if(path==='me')return reply({user:actor?{...actor,name:d.users.find(u=>u.id===actor.id)?.name}:null});
   if(path==='customer'){
@@ -485,12 +486,12 @@ async function route(request:Request,path:string){
  }
  if(path==='venue/create'){
   authorize(actor,'settings');
-  const input=z.object({partnerId:id,name:z.string().trim().min(1).max(120),city:z.string().trim().min(1).max(80),address:z.string().trim().min(1).max(200),category:z.string().trim().max(60).optional(),hours:z.string().trim().max(60).optional(),latitude:z.number().min(-90).max(90).nullable().optional(),longitude:z.number().min(-180).max(180).nullable().optional()}).strict().parse(body);
+  const input=z.object({partnerId:id,name:z.string().trim().min(1).max(120),city:z.string().trim().min(1).max(80),address:z.string().trim().min(1).max(200),category:z.string().trim().max(60).optional(),hours:z.string().trim().max(60).optional(),latitude:z.number().min(-90).max(90).nullable().optional(),longitude:z.number().min(-180).max(180).nullable().optional(),phone:z.string().trim().max(30).optional()}).strict().parse(body);
   return reply(await write('settings',(d,current)=>{assertTenant(current,input.partnerId);const venue=createVenue(d,{...input,category:input.category??'',hours:input.hours??''});audit(d,current,`Établissement créé · ${venue.name}`);return {venue};}),201);
  }
  if(path==='venue/update'){
   authorize(actor,'settings');
-  const input=z.object({venueId:id,name:z.string().trim().min(1).max(120),city:z.string().trim().min(1).max(80),address:z.string().trim().min(1).max(200),category:z.string().trim().max(60).optional(),hours:z.string().trim().max(60).optional(),latitude:z.number().min(-90).max(90).nullable().optional(),longitude:z.number().min(-180).max(180).nullable().optional()}).strict().parse(body);
+  const input=z.object({venueId:id,name:z.string().trim().min(1).max(120),city:z.string().trim().min(1).max(80),address:z.string().trim().min(1).max(200),category:z.string().trim().max(60).optional(),hours:z.string().trim().max(60).optional(),latitude:z.number().min(-90).max(90).nullable().optional(),longitude:z.number().min(-180).max(180).nullable().optional(),phone:z.string().trim().max(30).optional()}).strict().parse(body);
   return reply(await write('settings',(d,current)=>{
    const target=d.venues.find(v=>v.id===input.venueId);if(!target)throw new DomainError('Établissement introuvable.',404);
    assertTenant(current,target.partnerId);
@@ -519,6 +520,54 @@ async function route(request:Request,path:string){
   return reply(await write('pricing',(d,current)=>{
    const partner=setPartnerCommission(d,input.partnerId,input.commissionBps);
    audit(d,current,`Commission partenaire · ${partner.name} · ${input.commissionBps===null?'taux de la grille':`${input.commissionBps/100} %`}`);
+   return {partner};
+  }));
+ }
+ if(path==='venue/branding'){
+  authorize(actor,'screen');
+  const locale=z.enum(ALL_POSTER_LOCALES as [string,...string[]]);
+  const input=z.object({venueId:id,theme:z.enum(POSTER_THEME_KEYS as [PosterTheme,...PosterTheme[]]),logoUrl:z.string().url().startsWith('https://').max(1000).nullable(),backgroundUrl:z.string().url().startsWith('https://').max(1000).nullable(),locales:z.array(locale).min(1).max(ALL_POSTER_LOCALES.length),copy:z.record(locale,z.object({headlines:z.array(z.string().max(80)).max(5),tagline:z.string().max(140)}).strict())}).strict().parse(body);
+  return reply(await write('screen',(d,current)=>{const venue=setVenueBranding(d,input.venueId,{theme:input.theme,logoUrl:input.logoUrl,backgroundUrl:input.backgroundUrl,locales:input.locales as typeof ALL_POSTER_LOCALES,copy:input.copy});audit(d,current,`Habillage de l’écran · ${venue.name}`);return {venue};}));
+ }
+ if(path==='promo/save'){
+  authorize(actor,'screen');
+  const minute=z.number().int().min(0).max(1440);
+  const input=z.object({id:id.optional(),venueId:id,title:z.string().trim().min(1).max(60),subtitle:z.string().trim().max(120),highlight:z.string().trim().max(30),imageUrl:z.string().url().startsWith('https://').max(1000).nullable(),days:z.array(z.number().int().min(0).max(6)).min(1).max(7),startMinute:minute.max(1439),endMinute:minute,startsAt:z.number().int().nullable(),endsAt:z.number().int().nullable(),durationMs:z.number().int().min(4000).max(60_000)}).strict().parse(body);
+  const {id:promoId,...fields}=input;
+  return reply(await write('screen',(d,current)=>{const promo=savePromo(d,{...fields,days:fields.days as Weekday[]},promoId);audit(d,current,`Promo ${promoId?'modifiée':'créée'} · ${promo.title}`);return {promo};}),promoId?200:201);
+ }
+ if(path==='promo/publish'||path==='promo/archive'){
+  authorize(actor,'screen');
+  const input=z.object({id}).strict().parse(body);
+  return reply(await write('screen',(d,current)=>{const promo=setPromoStatus(d,input.id,path==='promo/publish'?'PUBLISHED':'ARCHIVED');audit(d,current,`Promo ${path==='promo/publish'?'publiée':'archivée'} · ${promo.title}`);return {promo};}));
+ }
+ // The venue asks, BATYEO designs: a request lands in the support inbox, nothing reaches the screen by itself.
+ if(path==='promo/request'){
+  authorize(actor,'support');
+  const input=z.object({venueId:id,offer:z.string().trim().min(3).max(200),when:z.string().trim().min(2).max(200),details:z.string().trim().max(1000).optional()}).strict().parse(body);
+  return reply(await write('support',(d,current)=>{
+   if(!current.role.startsWith('PARTNER_'))throw new DomainError('Réservé aux établissements partenaires.',403);
+   const venue=d.venues.find(v=>v.id===input.venueId);if(!venue)throw new DomainError('Établissement introuvable.',404);
+   assertTenant(current,venue.partnerId);
+   rateLimit(d,`promo-request-${current.id}`,10);
+   const user=d.users.find(u=>u.id===current.id);
+   const ticket={id:crypto.randomUUID(),partnerId:venue.partnerId,email:user?.email??'',subject:`Demande de promo · ${venue.name}`,message:`Offre : ${input.offer}\nQuand : ${input.when}${input.details?`\nDétails : ${input.details}`:''}`,status:'OPEN' as const,createdAt:Date.now()};
+   d.tickets.push(ticket);audit(d,current,`Demande de promo · ${venue.name}`);
+   return {ticket};
+  }),201);
+ }
+ if(path==='partner/profile'){
+  authorize(actor,'settings');
+  const text=(max:number)=>z.string().trim().max(max);
+  const input=z.object({partnerId:id,legalName:text(160),siret:z.string().trim().regex(/^(\d{14})?$/,'SIRET : 14 chiffres.'),billingAddress:text(300),contactName:text(120),contactEmail:z.union([z.literal(''),z.string().trim().email().max(200)]),contactPhone:text(30),iban:z.string().transform(v=>v.replace(/\s+/g,'').toUpperCase()).pipe(z.string().regex(/^([A-Z]{2}\d{2}[A-Z0-9]{10,30})?$/,'IBAN invalide.')),contractStartedAt:z.number().int().nullable()}).strict().parse(body);
+  return reply(await write('settings',(d,current)=>{
+   // A partner editing its own IBAN would be the easiest way to divert its commissions: BATYEO staff only.
+   if(!['SUPER_ADMIN','ADMIN'].includes(current.role))throw new DomainError('Seul le personnel BATYEO modifie la fiche d’un partenaire.',403);
+   const partner=d.partners.find(p=>p.id===input.partnerId);if(!partner)throw new DomainError('Partenaire introuvable.',404);
+   const {partnerId,...fields}=input;void partnerId;
+   const ibanChanged=(partner.iban??'')!==fields.iban;
+   Object.assign(partner,fields);
+   audit(d,current,`Fiche partenaire · ${partner.name}${ibanChanged?' · IBAN modifié':''}`);
    return {partner};
   }));
  }

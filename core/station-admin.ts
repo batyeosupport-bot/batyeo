@@ -97,7 +97,7 @@ export function setPartnerCommission(d:Data,partnerId:string,commissionBps:numbe
  if(commissionBps!==null&&(!Number.isSafeInteger(commissionBps)||commissionBps<0||commissionBps>10_000))throw new DomainError('Taux de commission invalide.',400);
  partner.commissionBps=commissionBps;return partner;
 }
-export interface VenueFields {name:string;city:string;address:string;category:string;hours:string;latitude?:number|null;longitude?:number|null;}
+export interface VenueFields {name:string;city:string;address:string;category:string;hours:string;latitude?:number|null;longitude?:number|null;phone?:string;}
 export interface CreateVenueInput extends VenueFields {partnerId:string;}
 /** Mêmes règles à la création et à la correction : une fiche valide ne doit pas dépendre de la porte par laquelle elle est entrée. */
 function venueFields(input:VenueFields):Omit<Venue,'id'|'partnerId'> {
@@ -106,7 +106,8 @@ function venueFields(input:VenueFields):Omit<Venue,'id'|'partnerId'> {
  if(!input.address.trim()||input.address.length>200)throw new DomainError('Adresse invalide.',400);
  if(input.latitude!=null&&(input.latitude<-90||input.latitude>90))throw new DomainError('Latitude invalide.',400);
  if(input.longitude!=null&&(input.longitude<-180||input.longitude>180))throw new DomainError('Longitude invalide.',400);
- return {name:input.name.trim(),city:input.city.trim(),address:input.address.trim(),category:input.category.trim()||'Établissement',hours:input.hours.trim()||'Non renseigné',latitude:input.latitude??null,longitude:input.longitude??null};
+ if(input.phone!==undefined&&input.phone.length>30)throw new DomainError('Téléphone invalide.',400);
+ return {name:input.name.trim(),city:input.city.trim(),address:input.address.trim(),category:input.category.trim()||'Établissement',hours:input.hours.trim()||'Non renseigné',latitude:input.latitude??null,longitude:input.longitude??null,...(input.phone!==undefined?{phone:input.phone.trim()}:{})};
 }
 export function createVenue(d:Data,input:CreateVenueInput):Venue {
  const fields=venueFields(input);
@@ -132,39 +133,58 @@ export function updateVenue(d:Data,venueId:string,input:VenueFields,now=Date.now
 }
 
 export const INVENTORY_SNAPSHOT_MAX_AGE_MS=10*60_000;
+export interface MirrorResult {changed:boolean;skipped?:string;added:number;moved:number;missing:number}
 /**
- * Makes BATYEO's own slot/battery records mirror what the manufacturer's cabinet/query says is
- * physically in the cabinet. A real ejection names a manufacturer battery id; the coordinator then
- * requires that id to sit AVAILABLE in a local slot, and refuses (409) otherwise — after the
- * battery has already left. So without this, a real ejection would hand out a battery while
- * failing the rental and releasing the deposit. Explicit and admin-triggered, never automatic:
- * sync stays read-only. Refuses stations whose current batteries carry rental history (demo
- * stations): those rows cannot be deleted without orphaning past rentals, so a real cabinet
- * belongs on a fresh station. Charge is not known (the supplier only gives a voltage with no
- * documented conversion), so it is stored as 100 to avoid raising false low-battery alerts.
+ * Makes BATYEO's slots and batteries say exactly what the cabinet's last read says is physically
+ * inside it. A real ejection names a manufacturer battery id and the coordinator requires that id
+ * to sit AVAILABLE in a local slot, and the count shown on the screen is the local one capped by
+ * the cabinet: both are only right if the local map follows the hardware. Runs after every
+ * successful read (automatic) and behind « Aligner l'inventaire » (strict: says why it cannot).
+ *
+ * Never deletes a row — batteries and slots are durable, past rentals point at them. A battery
+ * that left the cabinet without a BATYEO rental becomes MISSING; one that comes back, or a LOST one
+ * a customer brings back, returns to service. Stands aside while a rental is starting or a return
+ * is still being processed: those flows own the battery at that moment, and the next read retries.
+ * Charge is not known (the supplier only gives a voltage with no documented conversion), so a new
+ * battery is stored at 100 to avoid false low-battery alerts.
  */
-export function adoptProviderInventory(d:Data,stationId:string,now=Date.now()):{batteries:number;slots:number} {
- const station=d.stations.find(s=>s.id===stationId);if(!station)throw new DomainError('Station introuvable.',404);
- const link=d.stationProviderLinks.find(l=>l.stationId===stationId&&l.active);if(!link)throw new DomainError('Cette station n’est associée à aucune borne fabricant.',409);
+export function mirrorCabinetInventory(d:Data,stationId:string,now=Date.now(),strict=false):MirrorResult{
+ const none={changed:false,added:0,moved:0,missing:0};
+ const stop=(reason:string,status=409):MirrorResult=>{if(strict)throw new DomainError(reason,status);return {...none,skipped:reason};};
+ const station=d.stations.find(s=>s.id===stationId);if(!station)return stop('Station introuvable.',404);
+ const link=d.stationProviderLinks.find(l=>l.stationId===stationId&&l.active);if(!link)return stop('Cette station n’est associée à aucune borne fabricant.');
  const snapshot=d.stationProviderSnapshots.find(s=>s.linkId===link.id);
- if(!snapshot||snapshot.syncedAt<now-INVENTORY_SNAPSHOT_MAX_AGE_MS)throw new DomainError('Aucune lecture récente de la borne : lancez d’abord une synchronisation fabricant.',409);
- if(!snapshot.online)throw new DomainError('La borne est hors ligne : impossible de connaître son contenu réel.',409);
- if(d.rentals.some(r=>r.stationId===stationId&&OPEN_STATES.includes(r.state)))throw new DomainError('Des locations sont en cours à cette station.',409);
- const ownSlots=d.slots.filter(s=>s.stationId===stationId),ownBatteryIds=new Set(ownSlots.flatMap(s=>s.batteryId?[s.batteryId]:[]));
- if(d.rentals.some(r=>r.batteryId!==null&&ownBatteryIds.has(r.batteryId))||d.tickets.some(t=>t.batteryId&&ownBatteryIds.has(t.batteryId)))throw new DomainError('Cette station porte un historique de démonstration : créez une station neuve pour la borne réelle.',409);
+ if(!snapshot||snapshot.syncedAt<now-INVENTORY_SNAPSHOT_MAX_AGE_MS)return stop('Aucune lecture récente de la borne : lancez d’abord une synchronisation fabricant.');
+ if(!snapshot.online)return stop('La borne est hors ligne : impossible de connaître son contenu réel.');
+ if(d.rentals.some(r=>r.stationId===stationId&&['CREATED','PAYMENT_AUTH','EJECTING'].includes(r.state)))return stop('Une location démarre à cette borne.');
+ if(snapshot.slots.some(s=>!Number.isInteger(s.position)||s.position<1||s.position>snapshot.totalSlots))return stop('Positions de slot incohérentes côté fabricant.');
  const incoming=snapshot.slots.flatMap(s=>s.batteryId?[s.batteryId]:[]);
- if(new Set(incoming).size!==incoming.length)throw new DomainError('La borne annonce deux fois la même batterie.',409);
- for(const id of incoming)if(d.batteries.some(b=>b.id===id&&!ownBatteryIds.has(id)))throw new DomainError('Une batterie de cette borne existe déjà ailleurs dans BATYEO.',409);
- if(snapshot.slots.some(s=>!Number.isInteger(s.position)||s.position<1||s.position>snapshot.totalSlots))throw new DomainError('Positions de slot incohérentes côté fabricant.',409);
- d.batteries=d.batteries.filter(b=>!ownBatteryIds.has(b.id));
- d.slots=d.slots.filter(s=>s.stationId!==stationId);
- station.capacity=snapshot.totalSlots;
- for(let position=1;position<=snapshot.totalSlots;position++){
-  const provided=snapshot.slots.find(s=>s.position===position)?.batteryId??null;
-  d.slots.push({id:crypto.randomUUID(),stationId,position,batteryId:provided});
-  if(provided)d.batteries.push({id:provided,charge:100,status:'AVAILABLE'});
+ if(new Set(incoming).size!==incoming.length)return stop('La borne annonce deux fois la même batterie.');
+ if(incoming.some(id=>d.batteries.find(b=>b.id===id)?.status==='RENTED'))return stop('Un retour de batterie est en cours de traitement.');
+ const wanted=new Map(snapshot.slots.flatMap(s=>s.batteryId?[[s.position,s.batteryId] as const]:[])),present=new Set(incoming);
+ if(snapshot.totalSlots>station.capacity)station.capacity=snapshot.totalSlots;
+ for(let position=1;position<=snapshot.totalSlots;position++)if(!d.slots.some(s=>s.stationId===stationId&&s.position===position))d.slots.push({id:crypto.randomUUID(),stationId,position,batteryId:null});
+ const result={...none};
+ for(const slot of d.slots.filter(s=>s.stationId===stationId)){
+  if(!slot.batteryId||wanted.get(slot.position)===slot.batteryId)continue;
+  const battery=d.batteries.find(b=>b.id===slot.batteryId);slot.batteryId=null;
+  if(battery&&!present.has(battery.id)){battery.status='MISSING';result.missing++;}
  }
- return {batteries:incoming.length,slots:snapshot.totalSlots};
+ for(const [position,batteryId] of wanted){
+  const slot=d.slots.find(s=>s.stationId===stationId&&s.position===position)!;if(slot.batteryId===batteryId)continue;
+  for(const other of d.slots)if(other.batteryId===batteryId)other.batteryId=null;
+  const battery=d.batteries.find(b=>b.id===batteryId);
+  if(!battery){d.batteries.push({id:batteryId,charge:100,status:'AVAILABLE'});result.added++;}
+  else{if(battery.status==='MISSING'||battery.status==='LOST')battery.status='AVAILABLE';result.moved++;}
+  slot.batteryId=batteryId;
+ }
+ return {...result,changed:result.added+result.moved+result.missing>0};
+}
+/** « Aligner l'inventaire » : the same mirror, on demand, and refusing out loud instead of waiting for the next read. */
+export function adoptProviderInventory(d:Data,stationId:string,now=Date.now()):{batteries:number;slots:number} {
+ const result=mirrorCabinetInventory(d,stationId,now,true);void result;
+ const snapshot=d.stationProviderSnapshots.find(s=>s.stationId===stationId)!;
+ return {batteries:snapshot.slots.filter(s=>s.batteryId).length,slots:snapshot.totalSlots};
 }
 
 /**

@@ -81,3 +81,23 @@ test('the two September 20 migrations can be replayed without error, so pasting 
   assert.equal(constraints.rows.length,1,'replaying never duplicates the check constraint');
  }finally{await db.close();}
 });
+
+test('the screen/promo migration replays cleanly, persists display config and heartbeats, and lets a battery be MISSING only outside every slot',async()=>{
+ const db=new PGlite();
+ try{
+  const migrations=readdirSync('prisma/migrations',{withFileTypes:true}).filter(entry=>entry.isDirectory()).map(entry=>entry.name).sort();
+  for(const migration of migrations) await db.exec(readFileSync(`prisma/migrations/${migration}/migration.sql`,'utf8'));
+  await db.exec(readFileSync('prisma/migrations/202609230001_screen_branding_promos/migration.sql','utf8'));
+  for(const table of ['VenuePromo','DisplayConfig','StationHeartbeat'])assert.equal((await db.query("SELECT 1 FROM pg_tables WHERE schemaname='public' AND tablename=$1",[table])).rows.length,1,table);
+  await db.exec(`INSERT INTO "Partner" (id,name,city,iban) VALUES ('p','P','Paris','FR7630006000011234567890189')`);
+  await db.exec(`INSERT INTO "Venue" (id,"partnerId",name,city,address,category,hours,branding) VALUES ('v','p','V','Paris','A','Bar','24/7','{"theme":"sport"}')`);
+  await db.exec(`INSERT INTO "VenuePromo" (id,"venueId",title,subtitle,highlight,days,"startMinute","endMinute","durationMs","createdAt","updatedAt") VALUES ('promo','v','Happy hour','','','[1,2]',1080,1200,8000,now(),now())`);
+  await assert.rejects(()=>db.exec(`INSERT INTO "VenuePromo" (id,"venueId",title,subtitle,highlight,days,"startMinute","endMinute","durationMs",status,"createdAt","updatedAt") VALUES ('bad','v','X','','','[1]',0,60,8000,'LIVE',now(),now())`));
+  await db.exec(`INSERT INTO "DisplayConfig" (id,"stationId","idleContent","supportContact",locale,"refreshIntervalMs","featureFlags","updatedAt") VALUES ('dc','s','','', 'fr-FR',15000,'{}',now())`);
+  await assert.rejects(()=>db.exec(`INSERT INTO "DisplayConfig" (id,"stationId","idleContent","supportContact",locale,"refreshIntervalMs","featureFlags","updatedAt") VALUES ('dc2','s','','', 'fr-FR',15000,'{}',now())`),()=>true,'one display config per station');
+  await db.exec(`INSERT INTO "Station" (id,"publicId","venueId","partnerId",capacity) VALUES ('s','s-1','v','p',1)`);
+  await db.exec(`INSERT INTO "Slot" (id,"stationId",position) VALUES ('slot','s',1)`);
+  await db.exec(`INSERT INTO "Battery" (id,charge,status) VALUES ('b',100,'MISSING')`);
+  await assert.rejects(()=>db.exec(`UPDATE "Slot" SET "batteryId"='b' WHERE id='slot'`),()=>true,'a MISSING battery can never sit in a slot');
+ }finally{await db.close();}
+});

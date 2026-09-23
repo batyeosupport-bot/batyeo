@@ -2,6 +2,9 @@ import {Prisma,PrismaClient} from '@prisma/client';
 import type {Repository} from '../../core/repository';
 import {PAYMENT_STATES,PHYSICAL_STATES,type Data} from '../../core/types';
 import type {PricingStrategy} from '../../core/pricing';
+import type {VenueBranding,VenuePromo} from '../../core/screen';
+import type {StationHeartbeat} from '../../core/heartbeat';
+import type {RuntimeTranslations} from '../../core/i18n';
 import {validateData} from '../../core/invariants';
 import {DomainError} from '../../core/providers';
 
@@ -32,11 +35,11 @@ function retryableConflict(error:unknown):boolean{
 export class PrismaRepository implements Repository {
  constructor(private readonly client:PrismaClient){}
  private async load(tx:Tx):Promise<Data>{
-  const [users,partners,venues,stations,slots,batteries,rentals,events,payments,pricing,terms,tickets,audits,sessions,partnerUsers,limits,customerSessions,customerHandoffTokens,webhookEvents,stationProviderLinks,stationProviderSnapshots,reconciliationRecords,manufacturerSyncRuns,runtimeCredentials,runtimeEnrollmentTokens,hardwareDiscoveryReports,stationCapabilities,media]=await Promise.all([
-   tx.user.findMany(),tx.partner.findMany(),tx.venue.findMany(),tx.station.findMany(),tx.slot.findMany(),tx.battery.findMany(),tx.rental.findMany(),tx.rentalEvent.findMany(),tx.payment.findMany(),tx.pricingStrategy.findMany({where:{active:true}}),tx.termsAcceptance.findMany(),tx.supportTicket.findMany(),tx.auditLog.findMany(),tx.session.findMany(),tx.partnerUser.findMany(),tx.rateLimit.findMany(),tx.customerSession.findMany(),tx.customerHandoffToken.findMany(),tx.webhookEvent.findMany(),tx.stationProviderLink.findMany(),tx.stationProviderSnapshot.findMany(),tx.reconciliationRecord.findMany(),tx.manufacturerSyncRun.findMany(),tx.runtimeCredential.findMany(),tx.runtimeEnrollmentToken.findMany(),tx.hardwareDiscoveryReport.findMany(),tx.stationCapability.findMany(),tx.media.findMany()
+  const [users,partners,venues,stations,slots,batteries,rentals,events,payments,pricing,terms,tickets,audits,sessions,partnerUsers,limits,customerSessions,customerHandoffTokens,webhookEvents,stationProviderLinks,stationProviderSnapshots,reconciliationRecords,manufacturerSyncRuns,runtimeCredentials,runtimeEnrollmentTokens,hardwareDiscoveryReports,stationCapabilities,media,promos,displayConfigs,stationHeartbeats]=await Promise.all([
+   tx.user.findMany(),tx.partner.findMany(),tx.venue.findMany(),tx.station.findMany(),tx.slot.findMany(),tx.battery.findMany(),tx.rental.findMany(),tx.rentalEvent.findMany(),tx.payment.findMany(),tx.pricingStrategy.findMany({where:{active:true}}),tx.termsAcceptance.findMany(),tx.supportTicket.findMany(),tx.auditLog.findMany(),tx.session.findMany(),tx.partnerUser.findMany(),tx.rateLimit.findMany(),tx.customerSession.findMany(),tx.customerHandoffToken.findMany(),tx.webhookEvent.findMany(),tx.stationProviderLink.findMany(),tx.stationProviderSnapshot.findMany(),tx.reconciliationRecord.findMany(),tx.manufacturerSyncRun.findMany(),tx.runtimeCredential.findMany(),tx.runtimeEnrollmentToken.findMany(),tx.hardwareDiscoveryReport.findMany(),tx.stationCapability.findMany(),tx.media.findMany(),tx.venuePromo.findMany(),tx.displayConfig.findMany(),tx.stationHeartbeat.findMany()
   ]);
   return {
-   users:users.map(u=>({...u,disabledAt:ms(u.disabledAt)})),partners,venues,
+   users:users.map(u=>({...u,disabledAt:ms(u.disabledAt)})),partners:partners.map(p=>({...p,contractStartedAt:ms(p.contractStartedAt)})),venues:venues.map(v=>({...v,branding:v.branding as unknown as VenueBranding|null})),
    stations:stations.map(s=>({...s,failure:s.failure as Data['stations'][number]['failure'],provider:s.provider==='manufacturer'?'manufacturer':'mock',providerLastSyncedAt:ms(s.providerLastSyncedAt),lastSeenAt:ms(s.lastSeenAt),stripeTerminalLocationUpdatedAt:ms(s.stripeTerminalLocationUpdatedAt),rentalsBlockedAt:ms(s.rentalsBlockedAt),archivedAt:ms(s.archivedAt)})),slots,
    batteries:batteries.map(b=>({...b,status:b.status as Data['batteries'][number]['status']})),
    rentals:rentals.map(row=>{const {pricingId,pricingSnapshot,...r}=row;void pricingId;return ({...r,paymentState:r.paymentState&&PAYMENT_STATES.includes(r.paymentState as typeof PAYMENT_STATES[number])?r.paymentState as Data['rentals'][number]['paymentState']:undefined,physicalState:r.physicalState&&PHYSICAL_STATES.includes(r.physicalState as typeof PHYSICAL_STATES[number])?r.physicalState as Data['rentals'][number]['physicalState']:undefined,createdAt:r.createdAt.getTime(),startedAt:ms(r.startedAt),returnedAt:ms(r.returnedAt),deadline:ms(r.deadline),pricing:snapshot(pricingSnapshot)});}),
@@ -56,16 +59,18 @@ export class PrismaRepository implements Repository {
    hardwareDiscoveryReports:hardwareDiscoveryReports.map(row=>({...row,collectedAt:row.collectedAt.getTime()})),
    stationCapabilities:stationCapabilities.map(row=>({...row,verifiedAt:ms(row.verifiedAt)})),
    media:media.map(row=>({...row,kind:row.kind as Data['media'][number]['kind'],status:row.status as Data['media'][number]['status'],startsAt:ms(row.startsAt),endsAt:ms(row.endsAt),targetStationIds:row.targetStationIds as unknown as Data['media'][number]['targetStationIds'],createdAt:row.createdAt.getTime()})),
-   displayConfigs:[],stationHeartbeats:[]
+   promos:promos.map(row=>({...row,days:row.days as unknown as VenuePromo['days'],status:row.status as VenuePromo['status'],startsAt:ms(row.startsAt),endsAt:ms(row.endsAt),createdAt:row.createdAt.getTime(),updatedAt:row.updatedAt.getTime()})),
+   displayConfigs:displayConfigs.map(row=>({...row,featureFlags:row.featureFlags as Record<string,boolean>,translations:row.translations as unknown as RuntimeTranslations|null,updatedAt:row.updatedAt.getTime()})),
+   stationHeartbeats:stationHeartbeats.map(row=>({...(row.payload as unknown as StationHeartbeat),id:row.id,stationId:row.stationId,at:row.at.getTime()}))
   };
  }
  async read():Promise<Data>{return this.client.$transaction(tx=>this.load(tx),{isolationLevel:Prisma.TransactionIsolationLevel.RepeatableRead,timeout:30_000});}
  private async save(tx:Tx,before:Data,after:Data){
   validateData(after);
-  await sync(before.partners,after.partners,p=>tx.partner.upsert({where:{id:p.id},create:p,update:p}));
+  await sync(before.partners,after.partners,p=>{const data={...p,contractStartedAt:date(p.contractStartedAt)};return tx.partner.upsert({where:{id:p.id},create:data,update:data});});
   await sync(before.users,after.users,u=>{const data={...u,disabledAt:date(u.disabledAt),authVersion:u.authVersion??0};return tx.user.upsert({where:{id:u.id},create:data,update:data});});
   await sync(before.partnerUsers,after.partnerUsers,m=>tx.partnerUser.upsert({where:{id:m.id},create:m,update:m}),ids=>tx.partnerUser.deleteMany({where:{id:{in:ids}}}));
-  await sync(before.venues,after.venues,v=>tx.venue.upsert({where:{id:v.id},create:v,update:v}));
+  await sync(before.venues,after.venues,v=>{const data={...v,branding:v.branding==null?Prisma.DbNull:v.branding as unknown as Prisma.InputJsonValue};return tx.venue.upsert({where:{id:v.id},create:data,update:data});});
   await sync(before.stations,after.stations,s=>{const data={...s,provider:s.provider??'mock',providerDeviceId:s.providerDeviceId??null,providerStatus:s.providerStatus??null,providerLastSyncedAt:date(s.providerLastSyncedAt),lastSeenAt:date(s.lastSeenAt),stripeTerminalLocationId:s.stripeTerminalLocationId??null,stripeTerminalLocationUpdatedAt:date(s.stripeTerminalLocationUpdatedAt),rentalsBlocked:s.rentalsBlocked??false,rentalsBlockedReason:s.rentalsBlockedReason??null,rentalsBlockedAt:date(s.rentalsBlockedAt),archivedAt:date(s.archivedAt)};return tx.station.upsert({where:{id:s.id},create:data,update:data});});
   await sync(before.batteries,after.batteries,b=>tx.battery.upsert({where:{id:b.id},create:b,update:b}));
   // Release moved batteries first, then attach them at the destination. All inside one TX.
@@ -103,6 +108,9 @@ export class PrismaRepository implements Repository {
   await sync(before.hardwareDiscoveryReports,after.hardwareDiscoveryReports,row=>{const data={...row,collectedAt:new Date(row.collectedAt),report:row.report as Prisma.InputJsonValue};return tx.hardwareDiscoveryReport.upsert({where:{id:row.id},create:data,update:data});});
   await sync(before.stationCapabilities,after.stationCapabilities,row=>{const data={...row,verifiedAt:date(row.verifiedAt)};return tx.stationCapability.upsert({where:{id:row.id},create:data,update:data});});
   await sync(before.media,after.media,row=>{const data={...row,startsAt:date(row.startsAt),endsAt:date(row.endsAt),targetStationIds:row.targetStationIds as unknown as Prisma.InputJsonValue,createdAt:new Date(row.createdAt)};return tx.media.upsert({where:{id:row.id},create:data,update:data});});
+  await sync(before.promos,after.promos,row=>{const data={...row,days:row.days as unknown as Prisma.InputJsonValue,startsAt:date(row.startsAt),endsAt:date(row.endsAt),createdAt:new Date(row.createdAt),updatedAt:new Date(row.updatedAt)};return tx.venuePromo.upsert({where:{id:row.id},create:data,update:data});});
+  await sync(before.displayConfigs,after.displayConfigs,row=>{const data={...row,featureFlags:row.featureFlags as Prisma.InputJsonValue,translations:row.translations==null?Prisma.DbNull:row.translations as unknown as Prisma.InputJsonValue,updatedAt:new Date(row.updatedAt)};return tx.displayConfig.upsert({where:{id:row.id},create:data,update:data});});
+  await sync(before.stationHeartbeats,after.stationHeartbeats,row=>{const {id,stationId,at,...rest}=row;void rest;const data={id,stationId,at:new Date(at),payload:row as unknown as Prisma.InputJsonValue};return tx.stationHeartbeat.upsert({where:{id},create:data,update:data});});
  }
  async transaction<T>(mutate:(data:Data)=>T):Promise<T>{
   for(let attempt=0;attempt<5;attempt++)try{

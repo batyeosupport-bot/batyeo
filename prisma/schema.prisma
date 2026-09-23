@@ -59,6 +59,14 @@ model Partner {
   name          String
   city          String
   commissionBps Int?
+  legalName         String    @default("")
+  siret             String    @default("")
+  billingAddress    String    @default("")
+  contactName       String    @default("")
+  contactEmail      String    @default("")
+  contactPhone      String    @default("")
+  iban              String    @default("")
+  contractStartedAt DateTime?
   venues        Venue[]
   users         PartnerUser[]
   rentals       Rental[]
@@ -82,8 +90,11 @@ model Venue {
   hours     String
   latitude  Float?
   longitude Float?
+  phone     String  @default("")
+  branding  Json?
   partner   Partner @relation(fields: [partnerId], references: [id])
   stations  Station[]
+  promos    VenuePromo[]
   @@index([partnerId])
   @@unique([id, partnerId])
 }
@@ -100,6 +111,43 @@ model Media {
   targetStationIds Json
   createdAt        DateTime @default(now())
   @@index([status])
+}
+model VenuePromo {
+  id          String    @id
+  venueId     String
+  title       String
+  subtitle    String
+  highlight   String
+  imageUrl    String?
+  days        Json
+  startMinute Int
+  endMinute   Int
+  startsAt    DateTime?
+  endsAt      DateTime?
+  durationMs  Int
+  status      String    @default("DRAFT")
+  createdAt   DateTime
+  updatedAt   DateTime
+  venue       Venue     @relation(fields: [venueId], references: [id])
+  @@index([venueId])
+}
+model DisplayConfig {
+  id                String   @id
+  stationId         String   @unique
+  idleContent       String
+  supportContact    String
+  maintenanceBanner String?
+  locale            String
+  refreshIntervalMs Int
+  featureFlags      Json
+  translations      Json?
+  updatedAt         DateTime
+}
+model StationHeartbeat {
+  id        String   @id
+  stationId String   @unique
+  at        DateTime
+  payload   Json
 }
 model Station {
   id            String @id @default(uuid())

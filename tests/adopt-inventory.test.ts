@@ -48,14 +48,7 @@ test('adoptProviderInventory refuses every unsafe case and changes nothing',asyn
  await check(()=>{}, /lecture récente/,['REAL-A'],1_000+INVENTORY_SNAPSHOT_MAX_AGE_MS+1);
  await check(()=>{}, /hors ligne/,['REAL-A'],2_000,false);
  await check(()=>{}, /deux fois/,['REAL-A','REAL-A']);
- await check(r=>{r.data.stations.push({id:'s2',publicId:'other-1',venueId:'v',partnerId:'p',online:true,failure:'none',capacity:1});r.data.batteries.push({id:'REAL-A',charge:50,status:'AVAILABLE'});r.data.slots.push({id:'o',stationId:'s2',position:1,batteryId:'REAL-A'});},/existe déjà ailleurs/);
- // demo station: batteries carry rental history
- const demo=seedData('x');linkManufacturerStation(demo,'station-paris','BAJIE','DEMO',1_000);
- const drepo=new MemoryRepository(demo);await new ManufacturerSyncService(drepo,{getDeviceInfo:async id=>cabinet(id,['REAL-A'])},{now:()=>1_000}).run({trigger:'MANUAL',stationId:'station-paris'});
- await assert.rejects(drepo.transaction(d=>adoptProviderInventory(d,'station-paris',2_000)),/locations sont en cours/,'seeded demo rentals are still open');
- const history=drepo.data.rentals.find(r=>r.stationId==='station-paris'&&r.state==='COMPLETED')!;
- drepo.data.rentals=drepo.data.rentals.filter(r=>r.stationId!=='station-paris'||r.state==='COMPLETED');drepo.data.rentals.push({...history,id:'history-of-slotted-battery',batteryId:'BAT-PAR-003',idempotencyKey:'k-history'});
- await assert.rejects(drepo.transaction(d=>adoptProviderInventory(d,'station-paris',2_000)),/historique de démonstration/);
+ await check(r=>{r.data.rentals.push({...seedData('x').rentals[0],id:'starting',stationId:'s',partnerId:'p',state:'EJECTING',batteryId:null});},/location démarre/);
  await assert.rejects(new MemoryRepository(freshStation()).transaction(d=>adoptProviderInventory(d,'s',2_000)),/aucune borne fabricant/);
 });
 
@@ -86,7 +79,8 @@ test('a station never offers more batteries than a fresh cabinet read reported',
  await new ManufacturerSyncService(repo,{getDeviceInfo:async id=>cabinet(id,['REAL-A',null])},{now:()=>t+2_000}).run({trigger:'SCHEDULED'});
  assert.equal(stationViews(repo.data,t+2_100).find(s=>s.id==='s')!.available,1,'local bookkeeping may not out-promise the cabinet');
  assert.equal(new MockBatteryStationProvider().getAvailability(repo.data,'s'),1,'the sales gate applies the same cap');
- assert.equal(stationViews(repo.data,t+2_000+PROVIDER_SNAPSHOT_FRESH_MS+1).find(s=>s.id==='s')!.available,2,'a stale read stops capping');
+ assert.equal(repo.data.batteries.find(b=>b.id==='REAL-B')!.status,'MISSING','the battery that left is out of every slot, not silently still counted');
+ assert.equal(stationViews(repo.data,t+2_000+PROVIDER_SNAPSHOT_FRESH_MS+1).find(s=>s.id==='s')!.available,1,'the local map itself now follows the cabinet, even once the read is old');
 });
 
 test('a lost battery that comes back, and a damaged one, can both be put right without the demo simulator',()=>{
@@ -137,4 +131,52 @@ test('the real cabinet can leave the demo station for a fresh one — the only w
  assert.equal(d.stationProviderSnapshots.length,0,'stale measurements of the old station are dropped');
  assert.throws(()=>moveManufacturerLink(d,'BAJIE','UNKNOWN','real'),/aucune station/);
  assert.throws(()=>moveManufacturerLink(d,'BAJIE','DTA55480','nowhere'),/cible introuvable/);
+});
+
+test('every successful read mirrors the cabinet on its own: a battery leaves, comes back, a new one appears',async()=>{
+ const repo=await synced(freshStation(),['REAL-A','REAL-B',null],1_000);
+ assert.deepEqual(repo.data.slots.filter(s=>s.stationId==='s').map(s=>[s.position,s.batteryId]),[[1,'REAL-A'],[2,'REAL-B'],[3,null]],'no button to press: the first read fills the station');
+ const read=(ids:(string|null)[],at:number)=>new ManufacturerSyncService(repo,{getDeviceInfo:async id=>cabinet(id,ids)},{now:()=>at}).run({trigger:'SCHEDULED'});
+ await read(['REAL-A',null,null],2_000);
+ assert.equal(repo.data.batteries.find(b=>b.id==='REAL-B')!.status,'MISSING');
+ await read(['REAL-A',null,'REAL-B'],3_000);
+ assert.equal(repo.data.batteries.find(b=>b.id==='REAL-B')!.status,'AVAILABLE','back in the cabinet, back in service, in its new slot');
+ assert.equal(repo.data.slots.find(s=>s.stationId==='s'&&s.position===3)!.batteryId,'REAL-B');
+ await read(['REAL-A','REAL-NEW','REAL-B'],4_000);
+ assert.equal(repo.data.batteries.find(b=>b.id==='REAL-NEW')!.status,'AVAILABLE');
+ assert.equal(stationViews(repo.data,4_100).find(s=>s.id==='s')!.available,3);
+});
+
+test('a battery moved from another station is moved, never duplicated, and a lost one brought back returns to service',async()=>{
+ const d=freshStation();
+ d.stations.push({id:'s2',publicId:'other-1',venueId:'v',partnerId:'p',online:true,failure:'none',capacity:1});d.batteries.push({id:'REAL-A',charge:50,status:'AVAILABLE'});d.slots.push({id:'o',stationId:'s2',position:1,batteryId:'REAL-A'});
+ const repo=await synced(d,['REAL-A',null],1_000);
+ assert.equal(repo.data.batteries.filter(b=>b.id==='REAL-A').length,1);
+ assert.equal(repo.data.slots.find(s=>s.id==='o')!.batteryId,null);
+ assert.equal(repo.data.slots.find(s=>s.stationId==='s'&&s.position===1)!.batteryId,'REAL-A');
+});
+
+test('the mirror stands aside while a return is still being processed, and the next read finishes the job',async()=>{
+ const repo=await synced(freshStation(),['REAL-A','REAL-B'],1_000);
+ const engine=new RentalEngine();
+ const rental=await repo.transaction(d=>engine.start(d,'cust','s','key-1',2_000));
+ const rented=rental.batteryId!;
+ // The cabinet sees the battery back but nobody closes the rental (return handler absent/failing).
+ await new ManufacturerSyncService(repo,{getDeviceInfo:async id=>cabinet(id,['REAL-A','REAL-B'])},{now:()=>3_000}).run({trigger:'SCHEDULED'});
+ assert.equal(repo.data.batteries.find(b=>b.id===rented)!.status,'RENTED','never takes a battery out of a live rental behind its back');
+ assert.equal(repo.data.rentals[0].state,'ACTIVE');
+});
+
+test('a demo station can take the real cabinet: its demo batteries leave the map, their history stays',async()=>{
+ const demo=seedData('x');
+ demo.rentals=demo.rentals.filter(r=>r.stationId!=='station-paris'||!['CREATED','PAYMENT_AUTH','EJECTING'].includes(r.state));
+ const before=demo.rentals.length;
+ linkManufacturerStation(demo,'station-paris','BAJIE','DEMO',1_000);
+ const repo=new MemoryRepository(demo);
+ const rentedHere=new Set(demo.rentals.filter(r=>r.batteryId&&demo.batteries.find(b=>b.id===r.batteryId)?.status==='RENTED').map(r=>r.batteryId));
+ await new ManufacturerSyncService(repo,{getDeviceInfo:async id=>cabinet(id,['REAL-A',null,null,null,null,null,null,null])},{now:()=>1_000}).run({trigger:'MANUAL',stationId:'station-paris'});
+ assert.equal(repo.data.rentals.length,before,'no rental is touched');
+ const inCabinet=repo.data.slots.filter(s=>s.stationId==='station-paris'&&s.batteryId).map(s=>s.batteryId);
+ assert.deepEqual(inCabinet,['REAL-A']);
+ assert.ok(repo.data.batteries.filter(b=>!rentedHere.has(b.id)&&b.status==='MISSING').length>0);
 });

@@ -11,6 +11,7 @@ export const batteries=record('batteries');
 export const events=record('events');
 export const pricing=record('pricing');
 export const tickets=record('tickets');
+export const promos=record('promos');
 export const audits=record('audits');
 export const sessions=record('sessions');
 export const limits=record('limits');

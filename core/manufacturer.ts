@@ -135,7 +135,10 @@ export class ManufacturerBatteryEjector {
   if(!externalId)throw new DomainError('Aucune borne fabricant associée à cette station.',503);
   const snapshot=await this.client.getDeviceInfo({deviceId:externalId});
   if(!snapshot.online)throw new DomainError('Borne fabricant hors ligne.',503);
-  const candidates=snapshot.slots.filter((slot):slot is ManufacturerSlotSnapshot&{battery:ManufacturerBatterySnapshot}=>slot.battery!==null);
+  // Only a battery BATYEO already holds AVAILABLE in this station: one the cabinet shows but the
+  // mirror has not recorded yet would leave the cabinet and then be refused by the coordinator.
+  const rentable=new Set(data.slots.filter(s=>s.stationId===stationId&&s.batteryId&&data.batteries.some(b=>b.id===s.batteryId&&b.status==='AVAILABLE')).map(s=>s.batteryId));
+  const candidates=snapshot.slots.filter((slot):slot is ManufacturerSlotSnapshot&{battery:ManufacturerBatterySnapshot}=>slot.battery!==null&&rentable.has(slot.battery.id));
   if(!candidates.length)throw new DomainError('Aucune batterie disponible sur cette borne.',409);
   // Best-charged battery first: a simple, deterministic policy rather than an arbitrary slot order.
   const chosen=candidates.reduce((best,slot)=>slot.battery.voltage>best.battery.voltage?slot:best);
