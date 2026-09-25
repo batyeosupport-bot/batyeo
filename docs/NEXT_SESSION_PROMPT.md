@@ -1,4 +1,4 @@
-# Brief de reprise — BATYEO (état au 2026-09-23)
+# Brief de reprise — BATYEO (état au 2026-09-25)
 
 > Colle ce brief tel quel au démarrage d'une nouvelle session. Aucun secret ici : mots de passe,
 > clés Stripe et identifiants ChargeNow restent dans les notes personnelles de l'utilisateur,
@@ -109,11 +109,35 @@ faire tourner une dernière fois une fois tout stabilisé, sans redéployer entr
    son protocole, ou s'il peut router le paiement. En attendant, paiement par téléphone uniquement.
 3. **Secrets Vercel** : `CRON_SECRET`, `STRIPE_WEBHOOK_SECRET`, `RESEND_API_KEY` + `MAIL_FROM`, et
    **activer Vercel Blob** (sinon l'envoi de logos/photos d'habillage et de promos échoue).
+   **Sans email configuré, aucune caution n'est jamais encaissée pour une batterie perdue** (la
+   règle « pas de débit sans avertissement envoyé 24 h avant » bloque tout), et Stripe annule
+   l'empreinte au bout de 7 jours : la batterie est alors perdue sans rien encaisser.
+3 bis. **Décision produit en attente** : l'email reste facultatif à la location. Un client qui n'en
+   donne pas ne peut donc jamais être débité s'il garde la batterie. Rendre l'email obligatoire en
+   paiement par carte (et adapter `/privacy` §1) ferme ce trou — à décider par l'utilisateur.
 4. **Statut légal** : SIRET, IBAN, assurance, TVA (absente partout : mention « TVA non
    applicable, art. 293 B du CGI » ou TVA affichée, selon le statut), relecture juridique.
-5. **Sécurité restante** : double authentification des comptes admin, « mot de passe oublié »,
-   alertes automatiques en cas de panne (Sentry ou équivalent), vérifier les sauvegardes Supabase.
+5. **Sécurité restante** : « mot de passe oublié » (la double vérification est faite depuis le
+   2026-09-23), alertes automatiques en cas de panne (Sentry ou équivalent), vérifier les
+   sauvegardes Supabase. Page « Mentions légales » absente (obligatoire, LCEN) : attend les infos
+   du point 4.
 6. **Passage en argent réel** après tout le reste et un test complet sur la vraie borne.
+
+## Fait le 2026-09-25 (audit, détail dans `docs/AUDIT.md`)
+
+- Webhook Stripe : `charge.succeeded` ignoré (il arrive dès l'autorisation d'une caution et aurait
+  marqué 20 € encaissés sans rien capturer). Seuls les événements `payment_intent.*` sont lus.
+- `internal/rentals/capture-overdue-losses` exige, comme la tâche de nuit, un avertissement envoyé
+  24 h avant ; une perte retenue faute d'avertissement lève une alerte CRITICAL avec le nombre de
+  jours avant expiration de l'empreinte.
+- Délai de restitution plafonné à 72 h (`MAX_DEADLINE_HOURS`) pour que la capture d'une perte tombe
+  toujours avant l'expiration Stripe de 7 jours.
+- Tâche de nuit : purge des sessions expirées et des passages de synchro de plus de 14 jours.
+- Site public : FAQ et conditions suivent la grille tarifaire réelle ; le bouton de « Comment ça
+  marche » ne pointe plus vers `paris-demo` ; sitemap, robots.txt et liens canoniques pointent vers
+  `batyeo.vercel.app` (ou `NEXT_PUBLIC_SITE_URL`) au lieu d'un ancien domaine.
+- Admin → Stations → Gérer : bouton « Bloquer les locations » (maintenance) — l'API existait sans
+  écran.
 
 ## Fait le 2026-09-23
 
@@ -139,7 +163,7 @@ Paiement par carte de bout en bout (vérifié avec le vrai Stripe), détection d
 hors ligne sans webhook (lecture à la demande + tâche planifiée), remboursement et contestations
 bancaires, relevé de commissions par partenaire exportable en CSV, gestion de compte en libre-
 service, écran de borne utilisable dans un navigateur (médias, message d'accueil, bandeau de
-maintenance), 325 tests + `test:sql` + `test:integration` + build tous verts au dernier commit.
+maintenance), 355 tests + `test:sql` + `test:integration` + build tous verts au dernier commit.
 
 ## Méthode de travail attendue
 

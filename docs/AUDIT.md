@@ -210,3 +210,54 @@ comme réel.
   sur staging puis production.
 - **Le reste de la boucle physique** — inchangé : réponse du fournisseur, enregistrement du
   webhook, puis ouverture du verrou. Voir `docs/EXTERNAL_BLOCKERS.md`.
+
+
+---
+
+# Second audit — 2026-09-25
+
+Relecture complète des routes (`server/http.ts`), du moteur de location, du coordinateur Stripe,
+des notifications et du site public. 355 tests, `tsc`, ESLint, `test:sql` et `build:postgres` verts
+après corrections.
+
+## Corrigé
+
+- **Webhook `charge.succeeded` lu comme une capture.** Pour une carte en capture manuelle, Stripe
+  émet `charge.succeeded` dès l'*autorisation*, avec la caution entière en `amount`. Le projecteur le
+  traitait comme `payment_intent.succeeded` : paiement marqué `CAPTURED` à 20 € sans capture réelle,
+  puis au retour `StripeRentalCoordinator.return` voyait `CAPTURED` et sautait la vraie capture
+  (client jamais débité, chiffres faux en Finance). En plus, l'id `ch_…` écrasait la référence
+  `pi_…` dont dépendent remboursements et contestations. Latent tant que `STRIPE_WEBHOOK_SECRET`
+  n'est pas posé. Seuls les `payment_intent.*` sont désormais lus.
+- **Route de capture héritée sans avertissement.** `internal/rentals/capture-overdue-losses`
+  capturait sans vérifier `warnedLongEnough`, contrairement à `internal/cron` et à la promesse des
+  conditions. Même règle appliquée.
+- **Empreinte expirée avant la capture d'une perte.** Stripe annule une autorisation non capturée
+  au bout de 7 jours. Le délai de restitution acceptait jusqu'à 168 h : délai + 48 h de grâce
+  dépassait largement 7 jours. Plafonné à 72 h côté API et formulaire.
+- **Perte retenue invisible.** Une batterie perdue sans avertissement envoyé n'est jamais
+  encaissée ; l'alerte disait pourtant « caution capturée ». Elle dit maintenant « NON encaissée »
+  et compte les jours restants avant expiration de l'empreinte.
+- **Tables qui grossissent sans fin.** Chaque requête charge toute la base ; les sessions clients
+  (une par première visite, robots compris) et les passages de synchro (jusqu'à un toutes les
+  2 min) n'étaient jamais purgés. Purge nocturne ajoutée.
+- **Textes publics figés.** FAQ (« 4 h », « 8 € », « 48 h ») et conditions (§4 « 48 heures »)
+  suivent maintenant la grille active. Le bouton « Louer une batterie » de /how-it-works menait à
+  `paris-demo`.
+- **Mauvais domaine.** Sitemap, robots.txt et `metadataBase` pointaient vers
+  `batyeo-web.anismeslin5.chatgpt.site` : liens canoniques vers un autre site. `/kiosk` retiré de
+  l'indexation.
+- **Maintenance d'une borne sans écran.** `station/block-rentals` existait sans bouton.
+
+## Reste à faire (décision ou information de l'utilisateur)
+
+- **Email facultatif = batterie gratuite.** Sans adresse, aucun avertissement possible, donc aucune
+  capture : garder la batterie ne coûte rien. Et tant que Resend n'est pas configuré, c'est le cas
+  de *toutes* les locations. Recommandation : email obligatoire en paiement par carte.
+- **Mentions légales** (page obligatoire) et identité de l'exploitant dans CGU/confidentialité.
+- **Mot de passe oublié**, alertes de panne, sauvegardes : inchangé.
+- **Montée en charge.** Chargement intégral de la base à chaque requête : suffisant pour quelques
+  bornes, à revoir (lectures ciblées) avant un réseau de plusieurs dizaines de bornes actives.
+- **Écran de borne dans l'app du fabricant.** `X-Frame-Options: DENY` s'applique aussi à
+  `/kiosk` : si l'app ChargeNow affiche une URL dans une iframe (et non une WebView), la page sera
+  refusée. À vérifier avec Tony ; une exception ciblée sur `/kiosk/*` suffirait.

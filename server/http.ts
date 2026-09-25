@@ -3,7 +3,7 @@ import {authorizeRuntime} from '../core/runtime-access';
 import {z,ZodError} from 'zod';
 import type {Repository} from '../core/repository';
 import {actorFor,actorForDigest,actorForUser,cookie,customerToken,setCookie,sha256,createPasswordHash,verifyPassword,rateLimit,verifyOrigin,requireCustomer,SESSION_LIFETIME_MS,CUSTOMER_LIFETIME_MS,CUSTOMER_HANDOFF_LIFETIME_MS} from '../core/security';
-import {RentalEngine,authorize,assertTenant,OPEN_STATES,overdueLossEligible} from '../core/rental';
+import {RentalEngine,authorize,assertTenant,OPEN_STATES,overdueLossEligible,warnedLongEnough,MAX_DEADLINE_HOURS} from '../core/rental';
 import {DomainError,MockBatteryStationProvider} from '../core/providers';
 import {verifyStripeSignature,StripePaymentProvider,createTerminalConnectionToken,createTerminalLocation,listTerminalLocations} from '../core/stripe';
 import {StripeRentalCoordinator,type AsyncBatteryEjector} from '../core/stripe-coordinator';
@@ -11,7 +11,7 @@ import {resolvePaymentMode,type PaymentMode} from '../core/payment-mode';
 import {ManufacturerBatteryEjector,ManufacturerBatteryStationProvider,ManufacturerHttpClient,reconcileManufacturerStation,resolveManufacturerConfig,validateManufacturerStartup} from '../core/manufacturer';
 import {ManufacturerSyncService,linkManufacturerStation,moveManufacturerLink} from '../core/manufacturer-sync';
 import {resolveMailer,type MailConfig} from '../core/mailer';
-import {deliverNotices,warnedLongEnough,planOpsDigest} from '../core/notifications';
+import {deliverNotices,planOpsDigest} from '../core/notifications';
 import {MIN_PASSWORD_LENGTH,TEAM_ROLES,applyOwnPassword,createTeamMember,resetUserPassword,setUserDisabled} from '../core/accounts';
 import {providerHealth} from '../core/manufacturer-sync';
 import {partnerStatements} from '../core/statements';
@@ -24,7 +24,7 @@ import type {Actor,Data,StationHeartbeatRecord} from '../core/types';
 import {createStation,createVenue,updateVenue,publicQrUrl,setStripeTerminalLocation,blockStationRentals,unblockStationRentals,archiveStation,restoreStation,relocateStation,setPartnerCommission,createPartner,adoptProviderInventory,setBatteryService} from '../core/station-admin';
 import {createMedia,setMediaStatus} from '../core/media-admin';
 import {ALL_POSTER_LOCALES,POSTER_THEME_KEYS,posterFor,savePromo,setPromoStatus,setVenueBranding,type PosterTheme,type Weekday} from '../core/screen';
-import {purgeSettledWebhookEvents} from '../core/retention';
+import {purgeSettledWebhookEvents,purgeExpiredRecords} from '../core/retention';
 import {COMMISSION_TIERS_BPS} from '../core/pricing';
 import {handleUpload,type HandleUploadBody} from '@vercel/blob/client';
 /** Media kinds accepted for the admin upload button, mapped to what Vercel Blob will actually accept for that kind. */
@@ -97,8 +97,8 @@ async function route(request:Request,path:string){
   if(!expected||!provided||(await sha256(expected))!==(await sha256(provided)))throw new DomainError('Tâche planifiée non autorisée.',401);
   const now=Date.now();
   const sync=manufacturerSync?await manufacturerSync.run({trigger:'SCHEDULED'}):null;
-  let purgedWebhookEvents=0;
-  await repository.transaction(d=>{engine.refreshOverdue(d,now);purgedWebhookEvents=purgeSettledWebhookEvents(d,now);});
+  let purgedWebhookEvents=0,purgedExpired=0;
+  await repository.transaction(d=>{engine.refreshOverdue(d,now);purgedWebhookEvents=purgeSettledWebhookEvents(d,now);purgedExpired=purgeExpiredRecords(d,now);});
   // Warnings go out first, and NO customer is charged before one has really been delivered: /terms §5
   // and /privacy §3 promise a warning before any deposit is taken, with no exception for customers who
   // left no address or for a deployment with no mailer. Those cases used to skip straight to capture,
@@ -122,7 +122,7 @@ async function route(request:Request,path:string){
    if(!plan)digest='nothing_to_report';
    else digest=await mailConfig.mailer.send({to:mailConfig.opsEmail,...plan}).then(()=>'sent' as const,()=>'failed' as const);
   }
-  return reply({sync:sync?sync.status:'not_configured',overdue:losses.length,losses,skippedUnwarned,expiredUnconfirmed,notices,digest,purgedWebhookEvents});
+  return reply({sync:sync?sync.status:'not_configured',overdue:losses.length,losses,skippedUnwarned,expiredUnconfirmed,notices,digest,purgedWebhookEvents,purgedExpired});
  }
  if(request.method==='POST'&&path==='internal/manufacturer/sync'){
   const expected=typeof process!=='undefined'?process.env.MANUFACTURER_SYNC_SECRET:undefined,provided=request.headers.get('authorization')?.replace(/^Bearer /,'');if(!expected||!provided||(await sha256(expected))!==(await sha256(provided)))throw new DomainError('Job de synchronisation non autorisé.',401);if(!manufacturerSync)throw new DomainError('Provider fabricant non configuré.',503);return reply({run:await manufacturerSync.run({trigger:'SCHEDULED'})});
@@ -130,7 +130,8 @@ async function route(request:Request,path:string){
  if(request.method==='POST'&&path==='internal/rentals/capture-overdue-losses'){
   const expected=typeof process!=='undefined'?process.env.OVERDUE_CAPTURE_SECRET:undefined,provided=request.headers.get('authorization')?.replace(/^Bearer /,'');if(!expected||!provided||(await sha256(expected))!==(await sha256(provided)))throw new DomainError('Job de capture non autorisé.',401);
   const now=Date.now();await repository.transaction(d=>engine.refreshOverdue(d,now));
-  const candidates=(await repository.read()).rentals.filter(r=>overdueLossEligible(r,now));
+  // Same rule as internal/cron: never capture a deposit without a warning delivered a day before.
+  const snapshot=await repository.read(),candidates=snapshot.rentals.filter(r=>overdueLossEligible(r,now)&&warnedLongEnough(snapshot,r,now));
   const results:{rentalId:string;status:'captured'|'failed';error?:string}[]=[];
   for(const candidate of candidates){
    try{if(stripeCoordinator)await stripeCoordinator.captureOverdueLoss(repository,candidate.id,now);else await repository.transaction(d=>engine.markDepositLost(d,candidate.id,candidate.pricing.depositCents,undefined,now));results.push({rentalId:candidate.id,status:'captured'});}
@@ -776,7 +777,7 @@ async function route(request:Request,path:string){
   }));
  }
  if(path==='pricing'){
-  authorize(actor,'pricing');const input=z.object({hourlyCents:z.number().int().min(100).max(1000),capCents:z.number().int().min(100).max(2000),depositCents:z.number().int().min(100).max(10000),deadlineHours:z.number().int().min(1).max(168),commissionBps:z.number().int().min(0).max(10000)}).strict().refine(v=>v.capCents<=v.depositCents&&v.hourlyCents<=v.capCents,'Le plafond doit être compris entre le tarif horaire et la caution.').parse(body);
+  authorize(actor,'pricing');const input=z.object({hourlyCents:z.number().int().min(100).max(1000),capCents:z.number().int().min(100).max(2000),depositCents:z.number().int().min(100).max(10000),deadlineHours:z.number().int().min(1).max(MAX_DEADLINE_HOURS,`Délai de restitution : ${MAX_DEADLINE_HOURS} h au plus, sinon l’empreinte bancaire expire avant de pouvoir encaisser une batterie perdue.`),commissionBps:z.number().int().min(0).max(10000)}).strict().refine(v=>v.capCents<=v.depositCents&&v.hourlyCents<=v.capCents,'Le plafond doit être compris entre le tarif horaire et la caution.').parse(body);
   await write('pricing',(d,actor)=>{d.pricing=[{...input,id:crypto.randomUUID()}];audit(d,actor!,'Tarification mise à jour pour les prochaines locations');});return reply({ok:true});
  }
  if(path==='resolve-ticket'){

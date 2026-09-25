@@ -13,12 +13,7 @@ const day=(ms:number)=>new Intl.DateTimeFormat('fr-FR',{weekday:'long',day:'nume
 
 /** The timeline is visible to partners, so the marker records *that* a message went out, never to whom. */
 export const noticeAlreadySent=(d:Data,rentalId:string,kind:NoticeKind)=>d.events.some(e=>e.rentalId===rentalId&&e.type===PREFIX&&e.detail.startsWith(kind));
-/** A warning sent seconds before the capture is not a warning. The customer must have had a full day to react. */
-export const WARNING_LEAD_MS=24*3_600_000;
-export function warnedLongEnough(d:Data,rental:Rental,now:number):boolean{
- const sent=d.events.find(e=>e.rentalId===rental.id&&e.type===PREFIX&&e.detail.startsWith('OVERDUE_WARNING'));
- return !!sent&&sent.at<=now-WARNING_LEAD_MS;
-}
+export {WARNING_LEAD_MS,warnedLongEnough} from './rental';
 
 /** When the deposit will be captured if the battery is still out: the deadline plus the 48 h grace, mirroring overdueLossEligible. */
 export const lossDeadline=(r:Rental)=>r.deadline===null?null:r.deadline+OVERDUE_LOSS_GRACE_MS-r.simulatedMinutes*60_000;

@@ -7,6 +7,17 @@ import type {Actor,Data,Payment,Rental} from './types';
 export const OPEN_STATES:RentalState[]=['CREATED','PAYMENT_AUTH','EJECTING','ACTIVE','RETURN_PENDING','RETURNED','OVERDUE','ERROR'];
 /** Batterie jamais restituée : au-delà de ce délai après le retard, la caution est capturée en intégralité et la location est classée comme perte définitive. */
 export const OVERDUE_LOSS_GRACE_MS=48*3_600_000;
+/**
+ * Stripe cancels an uncaptured card authorization after 7 days. A lost battery is captured at the
+ * earliest 48 h after the deadline, and only once a warning is a day old — with a daily job that can
+ * add another day. 72 h of deadline keeps that last capture inside 6 days, a day short of the expiry.
+ */
+export const MAX_DEADLINE_HOURS=72;
+export const STRIPE_AUTHORIZATION_LIFETIME_MS=7*86_400_000;
+/** A warning sent seconds before the capture is not a warning. The customer must have had a full day to react. */
+export const WARNING_LEAD_MS=24*3_600_000;
+export const overdueWarningSentAt=(d:Data,rentalId:string)=>d.events.find(e=>e.rentalId===rentalId&&e.type==='NOTICE_SENT'&&e.detail.startsWith('OVERDUE_WARNING'))?.at??null;
+export function warnedLongEnough(d:Data,rental:Rental,now:number):boolean{const sent=overdueWarningSentAt(d,rental.id);return sent!==null&&sent<=now-WARNING_LEAD_MS;}
 export function overdueLossEligible(r:Rental,now=Date.now()):boolean {return r.state==='OVERDUE'&&r.deadline!==null&&now+r.simulatedMinutes*60_000-r.deadline>=OVERDUE_LOSS_GRACE_MS;}
 export function authorize(actor:Actor|undefined,capability:'read'|'operate'|'finance'|'support'|'settings'|'pricing'|'screen') {
  if(!actor)throw new DomainError('Veuillez vous connecter.',401);
