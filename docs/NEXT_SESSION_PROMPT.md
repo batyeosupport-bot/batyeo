@@ -1,4 +1,4 @@
-# Brief de reprise — BATYEO (état au 2026-09-25)
+# Brief de reprise — BATYEO (état au 2026-09-27)
 
 > Colle ce brief tel quel au démarrage d'une nouvelle session. Aucun secret ici : mots de passe,
 > clés Stripe et identifiants ChargeNow restent dans les notes personnelles de l'utilisateur,
@@ -102,11 +102,20 @@ faire tourner une dernière fois une fois tout stabilisé, sans redéployer entr
    physique. Soit l'APK `runtime/` (build debug existant du 2026-09-18, jamais installé), soit une
    URL personnalisée dans l'app du fabricant — question pour Tony. L'app native garde aussi son
    propre carrousel de médias, redondant avec celui de la page : à neutraliser à l'installation.
-2. **Tony (fournisseur)** : désactiver le flux de location natif ChargeNow (condition avant
-   `MANUFACTURER_ALLOW_PHYSICAL_ACTIONS`), confirmer l'inscription au webhook
-   `cabinet/eventPush/config`, et **le TPE intégré à la borne est celui du fournisseur** : le code
-   Stripe Terminal (`runtime/.../TerminalManager.kt`) ne peut pas le piloter. Demander son modèle et
-   son protocole, ou s'il peut router le paiement. En attendant, paiement par téléphone uniquement.
+2. **Tony (fournisseur) — l'utilisateur ne veut plus le solliciter.** Réponse du 2026-09-27 à « le
+   flux de location natif est-il désactivé ? » : *« The machine will process the first rental first,
+   and then the second one. »* Donc **le flux natif reste actif**. Il a seulement coupé le carrousel
+   d'images/vidéos au démarrage (l'écran est libre pour `/kiosk`). Décisions prises :
+   - pas de TPE (celui du fabricant n'est pas pilotable ; paiement sur le téléphone du client) ;
+   - chaque sortie est désormais **vérifiée par relecture** (`ManufacturerBatteryEjector.confirmLeft`,
+     jusqu'à 3 relectures sur 10 s) : batterie encore présente ou borne illisible = résultat
+     inconnu, caution gardée sans débit, réconciliation humaine (écran client « vérification ») ;
+   - l'utilisateur doit **couvrir les QR/autocollants du fabricant** sur la borne (sinon des
+     locations passent par le circuit ChargeNow, hors BATYEO) ;
+   - prochaine étape : **premier test réel supervisé** (utilisateur devant la borne, une batterie),
+     `MANUFACTURER_ALLOW_PHYSICAL_ACTIONS=true` seulement sur instruction explicite de sa part. À
+     observer pendant ce test : si la borne continue de signaler une batterie éjectée mais pas encore
+     retirée, chaque location passera en « inconnu » — ajuster alors `POP_VERIFY_DELAYS_MS`.
 3. **Secrets Vercel** : `CRON_SECRET`, `STRIPE_WEBHOOK_SECRET`, `RESEND_API_KEY` + `MAIL_FROM`, et
    **activer Vercel Blob** (sinon l'envoi de logos/photos d'habillage et de promos échoue).
    **Sans email configuré, aucune caution n'est jamais encaissée pour une batterie perdue** (la

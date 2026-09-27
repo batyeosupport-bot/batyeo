@@ -16,6 +16,8 @@ const config={baseUrl:'https://developer.chargenow.top/cdb-open-api/v1',username
 const physicalConfig={...config,allowPhysicalActions:true as const};
 const deviceFixture={msg:'success',code:0,unknownRoot:'accepted',data:{priceStrategy:{depositAmount:20,priceMinute:2,autoRefund:1,timeoutAmount:0,timeoutDay:2,dailyMaxPrice:8,freeMinutes:0,currencySymbol:'€',price:2,name:'demo',currency:'EUR',shopId:'shop-1'},shop:{address:'1 rue Démo',priceMinute:'2',city:'Paris',dailyMaxPrice:8,latitude:'48.8566',openingTime:'24/7',freeMinutes:0,icon:'',content:'',province:'',price:2,name:'Hôtel Démo',deposit:20,logo:'',id:'shop-1',region:'',longitude:'2.3522'},batteries:[{slotNum:1,vol:4100,batteryId:'BAT-M-1',futureField:true},{slotNum:3,vol:4050,batteryId:'BAT-M-2'}],cabinet:{ip:'10.0.0.1',remark:'',type:'8-slot',slots:4,qrCode:'QR-DEMO',online:true,emptySlots:1,busySlots:1,id:'cabinet-1',shopId:'shop-1',signal:'good',posDeviceId:''}}};
 const listFixture={msg:'success',code:0,list:[{price:{priceId:1,freeDuration:'0',price:'2',chargeUnit:'hour',dailyCapAmount:'8',deposit:'20'},cabinet:{batteryNum:'2',freeNum:'1',infoStatus:'online'},shop:{id:'shop-1',shopName:'Hôtel Démo',shopAddress:'1 rue Démo',mobile:'',distance:'10m',longitude:'2.3522',latitude:'48.8566',shopBanner:'',shopIcon:'',distanceNumber:10,sceneType:'hotel'},unknown:true}]};
+/** The same cabinet once one battery has physically left it. */
+const afterPop=(batteryId:string)=>({...deviceFixture,data:{...deviceFixture.data,batteries:deviceFixture.data.batteries.filter(b=>b.batteryId!==batteryId)}});
 const json=(payload:unknown,status=200)=>new Response(JSON.stringify(payload),{status,headers:{'content-type':'application/json'}});
 /** What the automatic mirror leaves behind after reading deviceFixture: its two batteries, AVAILABLE, in their slots at station-paris. */
 function mirrorFixture(data:Data){const slots=data.slots.filter(s=>s.stationId==='station-paris');for(const slot of slots)if(slot.batteryId){const b=data.batteries.find(x=>x.id===slot.batteryId);if(b&&b.status!=='RENTED')b.status='MISSING';slot.batteryId=null;}for(const [position,id] of [[1,'BAT-M-1'],[3,'BAT-M-2']] as const){slots.find(s=>s.position===position)!.batteryId=id;data.batteries.push({id,charge:100,status:'AVAILABLE'});}return data;}
@@ -58,8 +60,9 @@ test('operateDevice surfaces a non-zero response code as a typed provider error,
 test('ManufacturerBatteryEjector picks the best-charged slot from a live cabinet/query, pops it, and returns that battery id',async()=>{
  const data=mirrorFixture(seedData('unused'));data.stationProviderLinks.push({id:'link-1',stationId:'station-paris',manufacturer:'BAJIE',externalId:'BJH02347',active:true,createdAt:0,updatedAt:0});
  const repo=new MemoryRepository(data);let operateCall:{cabinetId:string;slotNum:number;operationType:string}|undefined;
- const client={getDeviceInfo:async()=>new ManufacturerHttpClient(config,async()=>json(deviceFixture)).getDeviceInfo({deviceId:'BJH02347'}),operateDevice:async(query:{cabinetId:string;slotNum:number;operationType:ManufacturerOperationType})=>{operateCall=query;return {code:0,msg:'success'};}};
- const battery=await new ManufacturerBatteryEjector(client,repo).ejectBatteryAsync('station-paris');
+ // Before the pop the cabinet holds both batteries; read again afterwards, BAT-M-1 is gone.
+ const client={getDeviceInfo:async()=>new ManufacturerHttpClient(config,async()=>json(operateCall?afterPop('BAT-M-1'):deviceFixture)).getDeviceInfo({deviceId:'BJH02347'}),operateDevice:async(query:{cabinetId:string;slotNum:number;operationType:ManufacturerOperationType})=>{operateCall=query;return {code:0,msg:'success'};}};
+ const battery=await new ManufacturerBatteryEjector(client,repo,{verifyDelaysMs:[0]}).ejectBatteryAsync('station-paris');
  assert.equal(battery,'BAT-M-1');// slot 1 · 4100 mV beats slot 3 · 4050 mV
  assert.deepEqual(operateCall,{cabinetId:'BJH02347',slotNum:1,operationType:'pop',reason:'BATYEO rental'});
 });
@@ -122,3 +125,19 @@ test('real ejections are refused at startup in mock payment mode, which cannot d
 });
 test('startup validation requires a scheduler secret only when Bajie is enabled',()=>{assert.throws(()=>validateManufacturerStartup({MANUFACTURER_PROVIDER:'bajie',MANUFACTURER_API_BASE_URL:config.baseUrl,MANUFACTURER_USERNAME:'user',MANUFACTURER_PASSWORD:'pass'}));assert.equal(validateManufacturerStartup({MANUFACTURER_PROVIDER:'disabled'}),undefined);assert.equal(validateManufacturerStartup({}),undefined);});
 test('admin provider endpoint exposes only mapped data and keeps tenant isolation',async()=>{const data=seedData('unused');data.stations[0].providerDeviceId='BJH02347';data.stations[2].providerDeviceId='OTHER';const adminToken='a'.repeat(64),partnerToken='p'.repeat(64);data.sessions.push({id:await sha256(adminToken),userId:'admin-demo',expiresAt:Date.now()+60_000,authVersion:0},{id:await sha256(partnerToken),userId:'partner-demo',expiresAt:Date.now()+60_000,authVersion:0});const repo=new MemoryRepository(data);const client=new ManufacturerHttpClient(config,async()=>json(deviceFixture));const provider=new ManufacturerBatteryStationProvider(client);const api=createApi(repo,{demo:true,allowLegacyCredentials:true},{manufacturerProvider:provider});const request=(station:string,token:string)=>new Request(`https://batyeo.test/api/core/manufacturer/stations/${station}`,{headers:{cookie:`batyeo_session=${token}`}});const ok=await api.GET(request('station-paris',adminToken),{params:Promise.resolve({path:['manufacturer','stations','station-paris']})});assert.equal(ok.status,200);const body=await ok.json() as {station:Record<string,unknown>};assert.equal(body.station.deviceId,'BJH02347');assert.equal('priceStrategy' in body.station,false);assert.equal((await api.GET(request('station-lille',partnerToken),{params:Promise.resolve({path:['manufacturer','stations','station-lille']})})).status,404);});
+
+test('a pop the cabinet accepts but the battery never leaves is an unknown result, never a rental handed out on faith',async()=>{
+ // The manufacturer's own flow is still live on the machine: its customer can take the battery we chose between our read and our pop.
+ const data=mirrorFixture(seedData('unused'));data.stationProviderLinks.push({id:'link-1',stationId:'station-paris',manufacturer:'BAJIE',externalId:'BJH02347',active:true,createdAt:0,updatedAt:0});
+ let reads=0;
+ const stuck={getDeviceInfo:async()=>{reads++;return new ManufacturerHttpClient(config,async()=>json(deviceFixture)).getDeviceInfo({deviceId:'BJH02347'});},operateDevice:async()=>({code:0,msg:'success'})};
+ await assert.rejects(()=>new ManufacturerBatteryEjector(stuck,new MemoryRepository(structuredClone(data)),{verifyDelaysMs:[0,0,0]}).ejectBatteryAsync('station-paris'),(error:unknown)=>error instanceof PhysicalResultUnknownError&&/toujours détectée/.test(error.message));
+ assert.equal(reads,4,'one read to choose, then every verification read');
+ let popped=false;
+ const unreadable={getDeviceInfo:async()=>{if(popped)throw new ManufacturerError('Délai de réponse fabricant dépassé.',504,'TIMEOUT');return new ManufacturerHttpClient(config,async()=>json(deviceFixture)).getDeviceInfo({deviceId:'BJH02347'});},operateDevice:async()=>{popped=true;return {code:0,msg:'success'};}};
+ await assert.rejects(()=>new ManufacturerBatteryEjector(unreadable,new MemoryRepository(structuredClone(data)),{verifyDelaysMs:[0,0]}).ejectBatteryAsync('station-paris'),(error:unknown)=>error instanceof PhysicalResultUnknownError&&/pas pu être relue/.test(error.message));
+ // A battery that leaves on the second look is a success: the cabinet can take a moment to report it.
+ let looks=0;popped=false;
+ const slow={getDeviceInfo:async()=>new ManufacturerHttpClient(config,async()=>json(popped&&++looks>1?afterPop('BAT-M-1'):deviceFixture)).getDeviceInfo({deviceId:'BJH02347'}),operateDevice:async()=>{popped=true;return {code:0,msg:'success'};}};
+ assert.equal(await new ManufacturerBatteryEjector(slow,new MemoryRepository(structuredClone(data)),{verifyDelaysMs:[0,0,0]}).ejectBatteryAsync('station-paris'),'BAT-M-1');
+});

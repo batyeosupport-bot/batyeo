@@ -126,8 +126,10 @@ export class ManufacturerBatteryStationProvider implements BatteryStationProvide
  * to exist unless MANUFACTURER_ALLOW_PHYSICAL_ACTIONS is exactly 'false', and nothing in server/
  * constructs this class yet. See docs/EXTERNAL_BLOCKERS.md.
  */
+/** When the cabinet is read again after a pop: the battery normally leaves within a couple of seconds. */
+export const POP_VERIFY_DELAYS_MS=[2_000,3_000,5_000];
 export class ManufacturerBatteryEjector {
- constructor(private readonly client:Pick<ManufacturerHttpClient,'getDeviceInfo'|'operateDevice'>,private readonly repository:Repository){}
+ constructor(private readonly client:Pick<ManufacturerHttpClient,'getDeviceInfo'|'operateDevice'>,private readonly repository:Repository,private readonly options:{verifyDelaysMs?:number[]}={}){}
  async ejectBatteryAsync(stationId:string):Promise<string>{
   const data=await this.repository.read();
   const link=data.stationProviderLinks.find(row=>row.stationId===stationId&&row.active);
@@ -149,7 +151,28 @@ export class ManufacturerBatteryEjector {
    if(error instanceof ManufacturerError&&(error.kind==='TIMEOUT'||error.kind==='UNAVAILABLE'))throw new PhysicalResultUnknownError(`Éjection fabricant incertaine (borne ${externalId}, slot ${chosen.position}) : ${error.message}`);
    throw error;
   }
-  return chosen.battery.id;
+  return this.confirmLeft(externalId,chosen.position,chosen.battery.id);
+ }
+ /**
+  * The cabinet's « OK » is not proof a battery left. The manufacturer's own rental flow stays live on
+  * the same machine and serves requests one after the other: if its customer took this very battery
+  * between our read and our pop, we popped an empty slot, and how the cabinet answers that is not
+  * documented. So the battery must be seen gone. Still there, or no read possible: the result is
+  * unknown — the deposit stays held, nothing is charged, and a human settles it (never a blind retry).
+  */
+ private async confirmLeft(externalId:string,position:number,batteryId:string):Promise<string>{
+  let stillThere=false;
+  for(const delay of this.options.verifyDelaysMs??POP_VERIFY_DELAYS_MS){
+   await new Promise(resolve=>setTimeout(resolve,delay));
+   try{
+    const after=await this.client.getDeviceInfo({deviceId:externalId});
+    if(!after.slots.some(slot=>slot.battery?.id===batteryId))return batteryId;
+    stillThere=true;
+   }catch{stillThere=false;}
+  }
+  throw new PhysicalResultUnknownError(stillThere
+   ?`La borne ${externalId} a accepté la sortie du slot ${position}, mais la batterie ${batteryId} y est toujours détectée.`
+   :`Sortie demandée à la borne ${externalId} (slot ${position}), mais la borne n’a pas pu être relue pour la confirmer.`);
  }
 }
 
