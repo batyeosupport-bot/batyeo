@@ -23,7 +23,7 @@ import {validateTranslations} from '../core/i18n';
 import type {Actor,Data,StationHeartbeatRecord} from '../core/types';
 import {createStation,createVenue,updateVenue,publicQrUrl,setStripeTerminalLocation,blockStationRentals,unblockStationRentals,archiveStation,restoreStation,relocateStation,setPartnerCommission,createPartner,adoptProviderInventory,setBatteryService} from '../core/station-admin';
 import {createMedia,setMediaStatus} from '../core/media-admin';
-import {ALL_POSTER_LOCALES,POSTER_THEME_KEYS,posterFor,savePromo,setPromoStatus,setVenueBranding,type PosterTheme,type Weekday} from '../core/screen';
+import {ALL_POSTER_LOCALES,POSTER_THEME_KEYS,posterFor,savePromo,setPromoStatus,setVenueBranding,type PosterTheme,type VenueBranding,type Weekday} from '../core/screen';
 import {purgeSettledWebhookEvents,purgeExpiredRecords} from '../core/retention';
 import {COMMISSION_TIERS_BPS} from '../core/pricing';
 import {handleUpload,type HandleUploadBody} from '@vercel/blob/client';
@@ -536,8 +536,8 @@ async function route(request:Request,path:string){
  if(path==='venue/branding'){
   authorize(actor,'screen');
   const locale=z.enum(ALL_POSTER_LOCALES as [string,...string[]]);
-  const input=z.object({venueId:id,theme:z.enum(POSTER_THEME_KEYS as [PosterTheme,...PosterTheme[]]),logoUrl:z.string().url().startsWith('https://').max(1000).nullable(),backgroundUrl:z.string().url().startsWith('https://').max(1000).nullable(),locales:z.array(locale).min(1).max(ALL_POSTER_LOCALES.length),copy:z.record(locale,z.object({headlines:z.array(z.string().max(80)).max(5),tagline:z.string().max(140)}).strict())}).strict().parse(body);
-  return reply(await write('screen',(d,current)=>{const venue=setVenueBranding(d,input.venueId,{theme:input.theme,logoUrl:input.logoUrl,backgroundUrl:input.backgroundUrl,locales:input.locales as typeof ALL_POSTER_LOCALES,copy:input.copy});audit(d,current,`Habillage de l’écran · ${venue.name}`);return {venue};}));
+  const input=z.object({venueId:id,theme:z.enum(POSTER_THEME_KEYS as [PosterTheme,...PosterTheme[]]),logoUrl:z.string().url().startsWith('https://').max(1000).nullable(),backgroundUrl:z.string().url().startsWith('https://').max(1000).nullable(),locales:z.array(locale).min(1).max(ALL_POSTER_LOCALES.length),copy:z.record(locale,z.object({headlines:z.array(z.string().max(80)).max(5),tagline:z.string().max(140)}).strict()),images:z.record(locale,z.string().url().startsWith('https://').max(1000)).optional()}).strict().parse(body);
+  return reply(await write('screen',(d,current)=>{const venue=setVenueBranding(d,input.venueId,{theme:input.theme,logoUrl:input.logoUrl,backgroundUrl:input.backgroundUrl,locales:input.locales as typeof ALL_POSTER_LOCALES,copy:input.copy,images:input.images as VenueBranding['images']});audit(d,current,`Habillage de l’écran · ${venue.name}`);return {venue};}));
  }
  if(path==='promo/save'){
   authorize(actor,'screen');

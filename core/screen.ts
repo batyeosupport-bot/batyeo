@@ -8,15 +8,17 @@ export const POSTER_THEMES={
  hotel:{label:'Hôtel',primary:'#0d1a2e',accent:'#f4ead6'},
  batyeo:{label:'BATYEO',primary:'#19382c',accent:'#d8ed98'},
  arcade:{label:'Arcade néon (jaune)',primary:'#0b0620',accent:'#ffd21f',layout:'arcade'},
+ image:{label:'Visuel sur mesure (une image par langue)',primary:'#0b0620',accent:'#ffd21f',layout:'image'},
 } as const;
-export type PosterLayout='classic'|'arcade';
+export type PosterLayout='classic'|'arcade'|'image';
 export const posterLayout=(theme:PosterTheme):PosterLayout=>{const t=POSTER_THEMES[theme] as {layout?:PosterLayout}|undefined;return t?.layout??'classic';};
 export type PosterTheme=keyof typeof POSTER_THEMES;
 export const POSTER_THEME_KEYS=Object.keys(POSTER_THEMES) as PosterTheme[];
 export const ALL_POSTER_LOCALES=POSTER_LOCALES.map(l=>l.locale) as PosterLocale[];
 
 /** How BATYEO dresses one venue's screens. Written by BATYEO staff only — never by the venue. */
-export interface VenueBranding {theme:PosterTheme;logoUrl:string|null;backgroundUrl:string|null;locales:PosterLocale[];copy:Partial<Record<PosterLocale,PosterCopy>>;updatedAt:number}
+/** `images`: for the made-to-measure style, one finished visual per language — its text is part of the picture, so each language needs its own. */
+export interface VenueBranding {theme:PosterTheme;logoUrl:string|null;backgroundUrl:string|null;locales:PosterLocale[];copy:Partial<Record<PosterLocale,PosterCopy>>;images?:Partial<Record<PosterLocale,string>>;updatedAt:number}
 export const DEFAULT_BRANDING:Omit<VenueBranding,'updatedAt'>={theme:'batyeo',logoUrl:null,backgroundUrl:null,locales:ALL_POSTER_LOCALES,copy:{}};
 
 /** 0 = dimanche … 6 = samedi, as Date#getDay. */
@@ -32,7 +34,14 @@ export function setVenueBranding(d:Data,venueId:string,input:Omit<VenueBranding,
  const locales=ALL_POSTER_LOCALES.filter(l=>input.locales.includes(l));
  const copy:VenueBranding['copy']={};
  for(const locale of ALL_POSTER_LOCALES){const entry=input.copy[locale];if(!entry)continue;const headlines=entry.headlines.map(h=>h.trim()).filter(Boolean);const tagline=entry.tagline.trim();if(headlines.length||tagline)copy[locale]={headlines,tagline};}
- venue.branding={theme:input.theme,logoUrl:input.logoUrl,backgroundUrl:input.backgroundUrl,locales,copy,updatedAt:Math.max(now,(venue.branding?.updatedAt??0)+1)};
+ const images:NonNullable<VenueBranding['images']>={};
+ for(const locale of ALL_POSTER_LOCALES){const url=input.images?.[locale]?.trim();if(url&&url.startsWith('https://'))images[locale]=url;}
+ if(posterLayout(input.theme)==='image'){
+  // Only a language that has its picture can be offered: a button leading to the French image would be a broken promise.
+  if(!images[locales[0]])throw new DomainError('Ajoutez l’image de la première langue choisie (le français en général).',400);
+  locales.splice(0,locales.length,...locales.filter(l=>images[l]));
+ }
+ venue.branding={theme:input.theme,logoUrl:input.logoUrl,backgroundUrl:input.backgroundUrl,locales,copy,images,updatedAt:Math.max(now,(venue.branding?.updatedAt??0)+1)};
  return venue;
 }
 
@@ -96,6 +105,6 @@ export function posterFor(d:Data,publicId:string,now=Date.now()){
  const theme=POSTER_THEMES[branding.theme]??POSTER_THEMES.batyeo;
  const promos=d.promos.filter(p=>p.venueId===venue.id&&promoLiveAt(p,now)).sort((a,b)=>a.createdAt-b.createdAt)
   .map(p=>({id:p.id,title:p.title,subtitle:p.subtitle,highlight:p.highlight,imageUrl:p.imageUrl,durationMs:p.durationMs,schedule:promoScheduleLabel(p)}));
- return {venueName:venue.name,branding:{logoUrl:branding.logoUrl,backgroundUrl:branding.backgroundUrl,primary:theme.primary,accent:theme.accent,layout:posterLayout(POSTER_THEMES[branding.theme]?branding.theme:'batyeo'),locales:branding.locales.length?branding.locales:ALL_POSTER_LOCALES,copy:branding.copy},promos};
+ return {venueName:venue.name,branding:{logoUrl:branding.logoUrl,backgroundUrl:branding.backgroundUrl,primary:theme.primary,accent:theme.accent,layout:posterLayout(POSTER_THEMES[branding.theme]?branding.theme:'batyeo'),images:branding.images??{},locales:branding.locales.length?branding.locales:ALL_POSTER_LOCALES,copy:branding.copy},promos};
 }
 export type PosterPayload=NonNullable<ReturnType<typeof posterFor>>;

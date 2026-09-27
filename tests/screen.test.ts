@@ -98,3 +98,13 @@ test('a venue dressed in the arcade style sends the arcade layout to its screens
  assert.equal(poster.branding.layout,'arcade');
  assert.equal(poster.branding.accent,'#ffd21f');
 });
+
+test('a made-to-measure visual needs its first language, and only languages with a picture are offered',()=>{
+ const d=seedData('x');const station=d.stations[0];
+ assert.throws(()=>setVenueBranding(d,station.venueId,{theme:'image',logoUrl:null,backgroundUrl:null,locales:['fr-FR','en-GB'],copy:{},images:{'en-GB':'https://cdn.example/en.gif'}}),/première langue/);
+ setVenueBranding(d,station.venueId,{theme:'image',logoUrl:null,backgroundUrl:null,locales:['fr-FR','en-GB','es-ES'],copy:{},images:{'fr-FR':'https://cdn.example/fr.gif','en-GB':'https://cdn.example/en.gif','es-ES':'http://not-https.example/es.gif'}});
+ const poster=posterFor(d,station.publicId)!;
+ assert.equal(poster.branding.layout,'image');
+ assert.deepEqual(poster.branding.locales,['fr-FR','en-GB'],'Spanish had no usable picture, so it is not offered');
+ assert.deepEqual(poster.branding.images,{'fr-FR':'https://cdn.example/fr.gif','en-GB':'https://cdn.example/en.gif'});
+});

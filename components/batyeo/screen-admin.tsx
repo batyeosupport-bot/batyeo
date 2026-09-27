@@ -65,6 +65,8 @@ function BrandingEditor({data, venueId, initial, refresh}: {data: Dashboard; ven
  const [backgroundUrl, setBackgroundUrl] = useState<string | null>(initial?.backgroundUrl ?? null);
  const [locales, setLocales] = useState<PosterLocale[]>(initial?.locales?.length ? initial.locales : ALL_POSTER_LOCALES);
  const [copy, setCopy] = useState<Partial<Record<PosterLocale, PosterCopy>>>(initial?.copy ?? {});
+ const [images, setImages] = useState<Partial<Record<PosterLocale, string>>>(initial?.images ?? {});
+ const imageMode = posterLayout(theme) === 'image';
  const [editLocale, setEditLocale] = useState<PosterLocale>('fr-FR');
  const [busy, setBusy] = useState(false);
  const edited = copy[editLocale] ?? {headlines: [], tagline: ''};
@@ -72,24 +74,29 @@ function BrandingEditor({data, venueId, initial, refresh}: {data: Dashboard; ven
  const toggle = (locale: PosterLocale, on: boolean) => {const next = ALL_POSTER_LOCALES.filter(l => l === locale ? on : locales.includes(l)); if (next.length) setLocales(next);};
  async function save() {
   setBusy(true);
-  try {await api('venue/branding', {venueId, theme, logoUrl, backgroundUrl, locales, copy}); await refresh(); toast.success('Habillage enregistré · les bornes le prennent dans les 20 secondes.');}
+  try {await api('venue/branding', {venueId, theme, logoUrl, backgroundUrl, locales, copy, images}); await refresh(); toast.success('Habillage enregistré · les bornes le prennent dans les 20 secondes.');}
   catch (e) {toast.error(e instanceof Error ? e.message : 'Enregistrement impossible.');}
   finally {setBusy(false);}
  }
  return <div className="screen-studio">
-  <div className="screen-preview"><KioskPoster branding={{logoUrl, backgroundUrl, primary: POSTER_THEMES[theme].primary, accent: POSTER_THEMES[theme].accent, layout: posterLayout(theme), locales, copy}} live={livePreview(data, venueId)}/></div>
+  <div className="screen-preview"><KioskPoster branding={{logoUrl, backgroundUrl, primary: POSTER_THEMES[theme].primary, accent: POSTER_THEMES[theme].accent, layout: posterLayout(theme), locales, copy, images}} live={livePreview(data, venueId)}/></div>
   <div className="venue-geo">
-   <label className="field-label">Style<Picker label="Style" value={theme} onChange={v => setTheme(v as PosterTheme)} options={POSTER_THEME_KEYS.map(key => ({value: key, label: POSTER_THEMES[key].label}))}/></label>
+   <label className="field-label">Style<Picker label="Style" value={theme} onChange={v => {const next = v as PosterTheme; setTheme(next); if (posterLayout(next) === 'image' && locales.length > 2) setLocales(['fr-FR', 'en-GB']);}} options={POSTER_THEME_KEYS.map(key => ({value: key, label: POSTER_THEMES[key].label}))}/></label>
    <label className="field-label">Langue des textes à modifier<Picker label="Langue" value={editLocale} onChange={v => setEditLocale(v as PosterLocale)} options={POSTER_LOCALES.map(l => ({value: l.locale, label: l.label}))}/></label>
   </div>
-  <div className="venue-geo"><ImageField label="Logo de l’établissement" value={logoUrl} onChange={setLogoUrl}/><ImageField label="Photo de fond" value={backgroundUrl} onChange={setBackgroundUrl}/></div>
+  {imageMode
+   ? <div className="venue-geo">{locales.map(l => <ImageField key={l} label={`Visuel · ${POSTER_LOCALES.find(p => p.locale === l)?.label} (16/9, 1920×1080 idéalement)`} value={images[l] ?? null} onChange={url => setImages(current => {const next = {...current}; if (url) next[l] = url; else delete next[l]; return next;})}/>)}</div>
+   : <div className="venue-geo"><ImageField label="Logo de l’établissement" value={logoUrl} onChange={setLogoUrl}/><ImageField label="Photo de fond" value={backgroundUrl} onChange={setBackgroundUrl}/></div>}
+  {imageMode && <p className="small muted">Le texte fait partie de l’image : chaque langue cochée a besoin de son visuel. Le QR, le prix et le stock s’affichent dans une carte à droite, à la place du dessin de la borne.</p>}
   <fieldset className="field-label"><legend>Langues proposées au toucher (le français reste la langue de repos)</legend>
    <div className="media-targets">{POSTER_LOCALES.map(l => <label className="target-check" key={l.locale}><Checkbox checked={locales.includes(l.locale)} onCheckedChange={v => toggle(l.locale, !!v)}/>{l.label}</label>)}</div>
   </fieldset>
+  {!imageMode && <>
   <label className="field-label">Phrases d’accroche · {POSTER_LOCALES.find(l => l.locale === editLocale)?.label} (une par ligne, vide = texte traduit par défaut)
    <textarea className="text-area" rows={3} value={edited.headlines.join('\n')} onChange={e => setCopy({...copy, [editLocale]: {...edited, headlines: e.target.value.split('\n')}})} placeholder={(posterLayout(theme) === 'arcade' ? [defaults.arcadeHeadline, defaults.arcadeKicker] : [defaults.headline1, defaults.headline2, defaults.headline3]).join('\n')}/>
   </label>
   <label className="field-label">Sous-titre<Input value={edited.tagline} maxLength={140} onChange={e => setCopy({...copy, [editLocale]: {...edited, tagline: e.target.value}})} placeholder={posterLayout(theme) === 'arcade' ? defaults.arcadePill : defaults.tagline}/></label>
+  </>}
   <Button className="cta" disabled={busy} onClick={() => void save()}>{busy && <Busy/>}Enregistrer l’habillage</Button>
  </div>;
 }

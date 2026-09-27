@@ -1,10 +1,10 @@
 'use client';
 import {useEffect, useState} from 'react';
 import {QRCodeSVG} from 'qrcode.react';
-import {POSTER_LOCALES, posterAvailability, posterPrice, resolvePosterText, type PosterCopy, type PosterLocale} from '@/core/poster-i18n';
+import {POSTER_LOCALES, POSTER_STRINGS, posterAvailability, posterPrice, resolvePosterText, type PosterCopy, type PosterLocale} from '@/core/poster-i18n';
 
 /** What BATYEO designs for a venue. The partner never edits this. */
-export interface PosterBranding {logoUrl: string | null; backgroundUrl: string | null; primary: string; accent: string; locales: PosterLocale[]; copy: Partial<Record<PosterLocale, PosterCopy>>; layout?: 'classic' | 'arcade'}
+export interface PosterBranding {logoUrl: string | null; backgroundUrl: string | null; primary: string; accent: string; locales: PosterLocale[]; copy: Partial<Record<PosterLocale, PosterCopy>>; layout?: 'classic' | 'arcade' | 'image'; images?: Partial<Record<PosterLocale, string>>}
 /** What the poster reads live, so it can never advertise a price or a stock the station doesn't have. */
 export interface PosterLive {venueName: string; city: string; online: boolean; available: number; hourlyCents: number; capCents: number; depositCents: number; qrTarget: string}
 export {POSTER_THEMES} from '@/core/screen';
@@ -108,6 +108,7 @@ function usePosterLocale(branding: PosterBranding, onInteract?: () => void) {
 }
 
 export function KioskPoster(props: {branding: PosterBranding; live: PosterLive; onInteract?: () => void}) {
+ if (props.branding.layout === 'image') return <ImagePoster {...props}/>;
  return props.branding.layout === 'arcade' ? <ArcadePoster {...props}/> : <ClassicPoster {...props}/>;
 }
 
@@ -397,6 +398,62 @@ const ARCADE_CSS = `
 .ka-hero.is-long{font-size:5.4cqw}.ka-kicker.is-long{font-size:4.2cqw}
 @keyframes ka-orbit{0%,100%{opacity:.9;transform:rotate(-14deg) scale(1)}50%{opacity:.5;transform:rotate(-14deg) scale(1.06)}}
 @media (prefers-reduced-motion:reduce){.ka-bg,.ka-orbit,.ka-bank{animation:none}}
+`;
+
+/**
+ * A finished visual, exactly as designed — its words are part of the picture, so each language is its
+ * own image and the FR/EN switch swaps pictures. Only the live parts are drawn on top, in one card on
+ * the right: the station's own QR, the price and the stock, which no picture can know.
+ */
+function ImagePoster({branding, live, onInteract}: {branding: PosterBranding; live: PosterLive; onInteract?: () => void}) {
+ const images = branding.images ?? {};
+ const offered = branding.locales.filter(l => images[l]);
+ const {locales, locale, choose} = usePosterLocale({...branding, locales: offered}, onInteract);
+ const t = POSTER_STRINGS[locale];
+ const image = images[locale] ?? images[locales[0]];
+ const canRent = live.online && live.available > 0;
+ const vars = {'--kp-primary': branding.primary, '--kp-accent': branding.accent} as React.CSSProperties;
+ return (
+  <div className="kp-frame ki-frame" style={vars} lang={locale}>
+   <style>{POSTER_CSS + IMAGE_CSS}</style>
+   {/* eslint-disable-next-line @next/next/no-img-element */}
+   {image ? <img key={image} className="ki-image" src={image} alt={live.venueName}/> : <div className="ki-missing">Aucune image pour cette langue.</div>}
+   <aside className="ki-card">
+    {locales.length > 1 && <nav className="ki-langs" aria-label="Langue · Language">{locales.map(l => <button type="button" key={l} lang={l} className={l === locale ? 'is-on' : ''} onClick={() => choose(l)}>{POSTER_LOCALES.find(p => p.locale === l)?.code}</button>)}</nav>}
+    {canRent ? (
+     <>
+      <div className="ki-qr"><QRCodeSVG value={live.qrTarget} size={512} bgColor="#ffffff" fgColor="#0b0b0b" style={{width: '100%', height: '100%'}}/></div>
+      <p className="ki-scan">{t.scan}</p>
+      <p className="ki-price"><b>{posterPrice(locale, live.hourlyCents)}</b> {t.perHour} · max <b>{posterPrice(locale, live.capCents)}</b></p>
+      <p className="ki-stock"><i/>{posterAvailability(locale, live.available)}</p>
+     </>
+    ) : <p className="ki-unavailable">{live.online ? t.allRented : t.offline}</p>}
+   </aside>
+  </div>
+ );
+}
+
+// The card sits over the right quarter of the visual, where a picture of the cabinet usually stands:
+// the customer is in front of the real one, so nothing the design says is lost.
+const IMAGE_CSS = `
+@import url('https://fonts.googleapis.com/css2?family=Montserrat:ital,wght@1,800;1,900&display=swap');
+.ki-frame{background:#07041a;box-shadow:none;font-family:Montserrat,'Arial Black',Arial,sans-serif}
+.ki-image{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;animation:ki-in .6s ease-out both}
+.ki-missing{position:absolute;inset:0;display:grid;place-items:center;font-size:2cqw;color:#fff}
+.ki-card{position:absolute;right:2.2cqw;top:50%;transform:translateY(-54%);z-index:2;width:22cqw;display:flex;flex-direction:column;align-items:center;gap:.8cqw;padding:1.3cqw 1.3cqw 1.4cqw;border-radius:1.8cqw;background:rgba(8,5,26,.86);border:.3cqw solid var(--kp-accent);box-shadow:0 0 2.4cqw color-mix(in srgb,var(--kp-accent) 55%,transparent),0 1.5cqw 3cqw rgba(0,0,0,.6);backdrop-filter:blur(6px)}
+.ki-langs{display:flex;gap:.5cqw;background:rgba(255,255,255,.08);padding:.35cqw;border-radius:99cqw}
+.ki-langs button{appearance:none;border:0;cursor:pointer;font:inherit;font-size:1.3cqw;font-weight:900;font-style:italic;min-width:4.4cqw;padding:.45cqw 1cqw;border-radius:99cqw;background:transparent;color:rgba(255,255,255,.75)}
+.ki-langs button.is-on{background:var(--kp-accent);color:#0b0620}
+.ki-qr{position:relative;width:100%;aspect-ratio:1;background:#fff;border-radius:1.2cqw;padding:1cqw}
+.ki-qr::after{content:'';position:absolute;inset:-.4cqw;border-radius:1.5cqw;border:.3cqw solid var(--kp-accent);animation:kp-ring 2s ease-out infinite}
+.ki-scan{margin:0;font-weight:900;font-style:italic;font-size:2cqw;line-height:1;text-align:center;text-transform:uppercase;color:#fff}
+.ki-price{margin:0;font-size:1.15cqw;font-weight:800;text-align:center;color:#e9e6ff}
+.ki-price b{color:var(--kp-accent);font-size:1.45cqw}
+.ki-stock{margin:0;display:flex;align-items:center;gap:.6cqw;font-size:1.1cqw;font-weight:800;color:#fff}
+.ki-stock i{width:.9cqw;height:.9cqw;border-radius:50%;background:#3dff7a;box-shadow:0 0 .8cqw #3dff7a;animation:kp-blink 1.6s ease-in-out infinite}
+.ki-unavailable{margin:0;font-size:1.8cqw;font-weight:800;text-align:center;color:#fff;padding:2cqw .5cqw}
+@keyframes ki-in{from{opacity:0}to{opacity:1}}
+@media (prefers-reduced-motion:reduce){.ki-image,.ki-qr::after,.ki-stock i{animation:none}}
 `;
 
 /** A venue's own offer, dressed in its colours. The QR stays in the corner: a promo slide never costs a rental. */

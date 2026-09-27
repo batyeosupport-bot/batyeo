@@ -20,6 +20,7 @@ export default function KioskPreviewPage() {
  const [logoUrl, setLogoUrl] = useState<string | null>(null);
  const [backgroundUrl, setBackgroundUrl] = useState<string | null>(null);
  const [locales, setLocales] = useState<PosterLocale[]>(['fr-FR', 'en-GB', 'es-ES']);
+ const [images, setImages] = useState<Partial<Record<PosterLocale, string>>>({});
  // ?style=arcade&lieu=Smile%20World&ville=Montigny(&langue=en-GB) opens a ready-made mock-up, handy to show a prospect.
  useEffect(() => {
   const query = new URLSearchParams(window.location.search);
@@ -28,6 +29,10 @@ export default function KioskPreviewPage() {
    if (style && style in POSTER_THEMES) setTheme(style as PosterTheme);
    if (lieu) setVenueName(lieu.slice(0, 60));
    if (ville !== null) setCity(ville.slice(0, 40));
+   // &image=…&image_en=… : the finished visuals for the made-to-measure style (an https address or a path on this site).
+   const image = query.get('image'), imageEn = query.get('image_en');
+   const safe = (url: string | null) => url && (url.startsWith('https://') || url.startsWith('/')) ? url : undefined;
+   if (safe(image) || safe(imageEn)) {setImages({'fr-FR': safe(image), 'en-GB': safe(imageEn)}); setLocales(['fr-FR', 'en-GB']);}
    const langue = query.get('langue');
    if (langue && POSTER_LOCALES.some(l => l.locale === langue)) setLocales([langue as PosterLocale]);
   }, 0);
@@ -47,7 +52,7 @@ export default function KioskPreviewPage() {
   if (next.length) setLocales(next);
  };
 
- const branding: PosterBranding = {logoUrl, backgroundUrl, primary: POSTER_THEMES[theme].primary, accent: POSTER_THEMES[theme].accent, layout: posterLayout(theme), locales, copy};
+ const branding: PosterBranding = {logoUrl, backgroundUrl, primary: POSTER_THEMES[theme].primary, accent: POSTER_THEMES[theme].accent, layout: posterLayout(theme), locales, copy, images};
  const live = {venueName, city, online, available, hourlyCents: DEFAULT_PRICING.hourlyCents, capCents: DEFAULT_PRICING.capCents, depositCents: DEFAULT_PRICING.depositCents, qrTarget: 'https://batyeo.vercel.app/rent/apercu'};
 
  return (
@@ -70,6 +75,10 @@ export default function KioskPreviewPage() {
     <label style={styles.field}>Ville (affichée sous le logo en style Arcade)<input value={city} onChange={e => setCity(e.target.value)} style={styles.input}/></label>
     <label style={styles.field}>Logo du bar<input type="file" accept="image/*" onChange={pickFile(setLogoUrl)} style={{maxWidth: '100%'}}/></label>
     <label style={styles.field}>Photo de fond<input type="file" accept="image/*" onChange={pickFile(setBackgroundUrl)} style={{maxWidth: '100%'}}/></label>
+    {posterLayout(theme) === 'image' && <>
+     <label style={styles.field}>Visuel en français<input type="file" accept="image/*" onChange={pickFile(url => setImages(current => ({...current, 'fr-FR': url ?? undefined})))} style={{maxWidth: '100%'}}/></label>
+     <label style={styles.field}>Visuel en anglais<input type="file" accept="image/*" onChange={pickFile(url => setImages(current => ({...current, 'en-GB': url ?? undefined})))} style={{maxWidth: '100%'}}/></label>
+    </>}
     <fieldset style={styles.fieldset}>
      <legend style={styles.legend}>Langues proposées (le client touche la sienne, français par défaut)</legend>
      <div style={styles.checks}>
