@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {sha256} from '../core/security';
 import {seedData} from '../core/seed';
 import {createApi} from '../server/http';
-import {parisClock,promoLiveAt,promoScheduleLabel,type VenuePromo} from '../core/screen';
+import {parisClock,posterFor,promoLiveAt,promoScheduleLabel,setVenueBranding,type VenuePromo} from '../core/screen';
 import type {Repository} from '../core/repository';
 import type {Data} from '../core/types';
 import {validateData} from '../core/invariants';
@@ -89,4 +89,12 @@ test('a promo follows Paris time — summer and winter — and a window may cros
  assert.equal(promoScheduleLabel({days:[1,2,3,4,5],startMinute:1080,endMinute:1200}),'Lun–Ven · 18h–20h');
  assert.equal(promoScheduleLabel({days:[0,1,2,3,4,5,6],startMinute:1290,endMinute:120}),'Tous les jours · 21h30–2h');
  assert.equal(promoScheduleLabel({days:[5,6],startMinute:1200,endMinute:1380}),'Ven, Sam · 20h–23h');
+});
+
+test('a venue dressed in the arcade style sends the arcade layout to its screens',()=>{
+ const d=seedData('x');const station=d.stations[0];
+ setVenueBranding(d,station.venueId,{theme:'arcade',logoUrl:null,backgroundUrl:null,locales:['fr-FR','en-GB'],copy:{}});
+ const poster=posterFor(d,station.publicId)!;
+ assert.equal(poster.branding.layout,'arcade');
+ assert.equal(poster.branding.accent,'#ffd21f');
 });

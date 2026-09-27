@@ -9,7 +9,7 @@ import {Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, Dia
 import {Busy, DataTable, Empty, Picker, Status, api, type Dashboard} from './shared';
 import {KioskPoster, KioskPromo} from './kiosk-poster';
 import {POSTER_LOCALES, POSTER_STRINGS, type PosterCopy, type PosterLocale} from '@/core/poster-i18n';
-import {ALL_POSTER_LOCALES, POSTER_THEMES, POSTER_THEME_KEYS, promoScheduleLabel, type PosterTheme, type VenueBranding, type Weekday} from '@/core/screen';
+import {ALL_POSTER_LOCALES, POSTER_THEMES, POSTER_THEME_KEYS, posterLayout, promoScheduleLabel, type PosterTheme, type VenueBranding, type Weekday} from '@/core/screen';
 
 type Refresh = () => Promise<void>;
 const IMAGE_MAX_BYTES = 15 * 1024 * 1024;
@@ -77,7 +77,7 @@ function BrandingEditor({data, venueId, initial, refresh}: {data: Dashboard; ven
   finally {setBusy(false);}
  }
  return <div className="screen-studio">
-  <div className="screen-preview"><KioskPoster branding={{logoUrl, backgroundUrl, primary: POSTER_THEMES[theme].primary, accent: POSTER_THEMES[theme].accent, locales, copy}} live={livePreview(data, venueId)}/></div>
+  <div className="screen-preview"><KioskPoster branding={{logoUrl, backgroundUrl, primary: POSTER_THEMES[theme].primary, accent: POSTER_THEMES[theme].accent, layout: posterLayout(theme), locales, copy}} live={livePreview(data, venueId)}/></div>
   <div className="venue-geo">
    <label className="field-label">Style<Picker label="Style" value={theme} onChange={v => setTheme(v as PosterTheme)} options={POSTER_THEME_KEYS.map(key => ({value: key, label: POSTER_THEMES[key].label}))}/></label>
    <label className="field-label">Langue des textes à modifier<Picker label="Langue" value={editLocale} onChange={v => setEditLocale(v as PosterLocale)} options={POSTER_LOCALES.map(l => ({value: l.locale, label: l.label}))}/></label>
@@ -87,9 +87,9 @@ function BrandingEditor({data, venueId, initial, refresh}: {data: Dashboard; ven
    <div className="media-targets">{POSTER_LOCALES.map(l => <label className="target-check" key={l.locale}><Checkbox checked={locales.includes(l.locale)} onCheckedChange={v => toggle(l.locale, !!v)}/>{l.label}</label>)}</div>
   </fieldset>
   <label className="field-label">Phrases d’accroche · {POSTER_LOCALES.find(l => l.locale === editLocale)?.label} (une par ligne, vide = texte traduit par défaut)
-   <textarea className="text-area" rows={3} value={edited.headlines.join('\n')} onChange={e => setCopy({...copy, [editLocale]: {...edited, headlines: e.target.value.split('\n')}})} placeholder={[defaults.headline1, defaults.headline2, defaults.headline3].join('\n')}/>
+   <textarea className="text-area" rows={3} value={edited.headlines.join('\n')} onChange={e => setCopy({...copy, [editLocale]: {...edited, headlines: e.target.value.split('\n')}})} placeholder={(posterLayout(theme) === 'arcade' ? [defaults.arcadeHeadline, defaults.arcadeKicker] : [defaults.headline1, defaults.headline2, defaults.headline3]).join('\n')}/>
   </label>
-  <label className="field-label">Sous-titre<Input value={edited.tagline} maxLength={140} onChange={e => setCopy({...copy, [editLocale]: {...edited, tagline: e.target.value}})} placeholder={defaults.tagline}/></label>
+  <label className="field-label">Sous-titre<Input value={edited.tagline} maxLength={140} onChange={e => setCopy({...copy, [editLocale]: {...edited, tagline: e.target.value}})} placeholder={posterLayout(theme) === 'arcade' ? defaults.arcadePill : defaults.tagline}/></label>
   <Button className="cta" disabled={busy} onClick={() => void save()}>{busy && <Busy/>}Enregistrer l’habillage</Button>
  </div>;
 }

@@ -15,7 +15,7 @@ export const POSTER_LOCALES=[
 ] as const;
 export type PosterLocale=typeof POSTER_LOCALES[number]['locale'];
 
-export const POSTER_STRING_KEYS=['perHour','capDay','deposit','scan','availableOne','availableMany','allRented','offline','charging','charged','step1','step2','step3','step4','headline1','headline2','headline3','tagline','accept'] as const;
+export const POSTER_STRING_KEYS=['perHour','capDay','deposit','scan','availableOne','availableMany','allRented','offline','charging','charged','step1','step2','step3','step4','headline1','headline2','headline3','tagline','accept','arcadeHeadline','arcadeKicker','arcadePill','arcadeStep1','arcadeStep2','arcadeStep3'] as const;
 export type PosterStringKey=typeof POSTER_STRING_KEYS[number];
 
 export const POSTER_STRINGS:Readonly<Record<PosterLocale,Readonly<Record<PosterStringKey,string>>>>={
@@ -27,6 +27,7 @@ export const POSTER_STRINGS:Readonly<Record<PosterLocale,Readonly<Record<PosterS
   step1:'Scanne le QR',step2:'Paie sur ton téléphone',step3:'Prends une batterie',step4:'Rends-la dans n’importe quelle borne',
   headline1:'Batterie à plat ?',headline2:'Reste encore un peu.',headline3:'La soirée continue.',tagline:'Recharge ton téléphone sans quitter ta table.',
   accept:'Paiement accepté',
+  arcadeHeadline:'Plus de batterie ?',arcadeKicker:'La fête continue.',arcadePill:'Loue ta batterie en quelques secondes',arcadeStep1:'Scanne le QR',arcadeStep2:'Prends ta batterie',arcadeStep3:'Profite !',
  },
  'en-GB':{
   perHour:'per hour',capDay:'max\nper day',deposit:'refundable\ndeposit',scan:'Scan to rent',
@@ -36,6 +37,7 @@ export const POSTER_STRINGS:Readonly<Record<PosterLocale,Readonly<Record<PosterS
   step1:'Scan the QR code',step2:'Pay on your phone',step3:'Grab a battery',step4:'Return it to any station',
   headline1:'Dead phone?',headline2:'Don’t leave yet.',headline3:'Keep the night going.',tagline:'Charge your phone without leaving your table.',
   accept:'We accept',
+  arcadeHeadline:'Phone dying?',arcadeKicker:'The party goes on.',arcadePill:'Rent a battery in seconds',arcadeStep1:'Scan the QR',arcadeStep2:'Grab your battery',arcadeStep3:'Enjoy!',
  },
  'es-ES':{
   perHour:'la hora',capDay:'máximo\nal día',deposit:'de fianza\nreembolsable',scan:'Escanea para alquilar',
@@ -45,6 +47,7 @@ export const POSTER_STRINGS:Readonly<Record<PosterLocale,Readonly<Record<PosterS
   step1:'Escanea el QR',step2:'Paga con tu móvil',step3:'Coge una batería',step4:'Devuélvela en cualquier estación',
   headline1:'¿Sin batería?',headline2:'No te vayas todavía.',headline3:'Que siga la noche.',tagline:'Carga tu móvil sin levantarte de la mesa.',
   accept:'Aceptamos',
+  arcadeHeadline:'¿Sin batería?',arcadeKicker:'La fiesta sigue.',arcadePill:'Alquila tu batería en segundos',arcadeStep1:'Escanea el QR',arcadeStep2:'Coge tu batería',arcadeStep3:'¡Disfruta!',
  },
  'it-IT':{
   perHour:'all’ora',capDay:'massimo\nal giorno',deposit:'di cauzione\nrimborsabile',scan:'Scansiona per noleggiare',
@@ -54,6 +57,7 @@ export const POSTER_STRINGS:Readonly<Record<PosterLocale,Readonly<Record<PosterS
   step1:'Scansiona il QR',step2:'Paga dal telefono',step3:'Prendi una batteria',step4:'Restituiscila in qualsiasi stazione',
   headline1:'Telefono scarico?',headline2:'Non andartene ancora.',headline3:'La serata continua.',tagline:'Ricarica il telefono senza lasciare il tavolo.',
   accept:'Accettiamo',
+  arcadeHeadline:'Batteria scarica?',arcadeKicker:'La festa continua.',arcadePill:'Noleggia una batteria in pochi secondi',arcadeStep1:'Scansiona il QR',arcadeStep2:'Prendi la batteria',arcadeStep3:'Divertiti!',
  },
  'de-DE':{
   perHour:'pro Stunde',capDay:'maximal\npro Tag',deposit:'Kaution,\nwird erstattet',scan:'Scannen & ausleihen',
@@ -63,6 +67,7 @@ export const POSTER_STRINGS:Readonly<Record<PosterLocale,Readonly<Record<PosterS
   step1:'QR-Code scannen',step2:'Am Handy bezahlen',step3:'Powerbank nehmen',step4:'An jeder Station zurückgeben',
   headline1:'Akku leer?',headline2:'Bleib noch ein bisschen.',headline3:'Der Abend geht weiter.',tagline:'Lade dein Handy, ohne den Tisch zu verlassen.',
   accept:'Wir akzeptieren',
+  arcadeHeadline:'Akku leer?',arcadeKicker:'Die Party geht weiter.',arcadePill:'Powerbank in Sekunden ausleihen',arcadeStep1:'QR-Code scannen',arcadeStep2:'Powerbank nehmen',arcadeStep3:'Viel Spaß!',
  },
  'pt-PT':{
   perHour:'por hora',capDay:'máximo\npor dia',deposit:'de caução\nreembolsável',scan:'Digitaliza para alugar',
@@ -72,6 +77,7 @@ export const POSTER_STRINGS:Readonly<Record<PosterLocale,Readonly<Record<PosterS
   step1:'Digitaliza o QR',step2:'Paga no telemóvel',step3:'Leva uma bateria',step4:'Devolve em qualquer estação',
   headline1:'Bateria em baixo?',headline2:'Fica mais um pouco.',headline3:'A noite continua.',tagline:'Carrega o telemóvel sem sair da mesa.',
   accept:'Aceitamos',
+  arcadeHeadline:'Sem bateria?',arcadeKicker:'A festa continua.',arcadePill:'Aluga uma bateria em segundos',arcadeStep1:'Digitaliza o QR',arcadeStep2:'Leva a tua bateria',arcadeStep3:'Aproveita!',
  },
  'zh-CN':{
   perHour:'每小时',capDay:'每日\n封顶',deposit:'押金\n可退还',scan:'扫码租借',
@@ -81,17 +87,19 @@ export const POSTER_STRINGS:Readonly<Record<PosterLocale,Readonly<Record<PosterS
   step1:'扫描二维码',step2:'手机支付',step3:'取出充电宝',step4:'任意站点归还',
   headline1:'手机没电了？',headline2:'别急着走。',headline3:'让今晚继续。',tagline:'不离开座位，也能给手机充电。',
   accept:'支持支付',
+  arcadeHeadline:'手机没电了？',arcadeKicker:'派对继续。',arcadePill:'几秒钟即可租借充电宝',arcadeStep1:'扫描二维码',arcadeStep2:'取走充电宝',arcadeStep3:'尽情享受！',
  },
 };
 
 /** What BATYEO wrote for one venue in one language; anything left blank falls back to the built-in wording. */
 export interface PosterCopy {headlines:string[];tagline:string}
 
-export function resolvePosterText(locale:PosterLocale,copy?:Partial<PosterCopy>){
+/** The arcade layout reads the same venue overrides as the classic one — first two headlines, then the tagline in the yellow band — with its own party wording as the default. */
+export function resolvePosterText(locale:PosterLocale,copy?:Partial<PosterCopy>,layout:'classic'|'arcade'='classic'){
  const strings=POSTER_STRINGS[locale];
  const custom=(copy?.headlines??[]).map(h=>h.trim()).filter(Boolean);
- const headlines=custom.length?custom:[strings.headline1,strings.headline2,strings.headline3];
- const tagline=copy?.tagline?.trim()||strings.tagline;
+ const headlines=custom.length?custom:layout==='arcade'?[strings.arcadeHeadline,strings.arcadeKicker]:[strings.headline1,strings.headline2,strings.headline3];
+ const tagline=copy?.tagline?.trim()||(layout==='arcade'?strings.arcadePill:strings.tagline);
  // French puts a space before ? ! : ; — non-breaking, so the mark never wraps alone onto the next line.
  const typeset=(text:string)=>locale==='fr-FR'?text.replace(/ ([?!:;»])/g,' $1'):text;
  return {strings,headlines:headlines.map(typeset),tagline:typeset(tagline)};

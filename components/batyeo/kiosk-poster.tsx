@@ -4,7 +4,7 @@ import {QRCodeSVG} from 'qrcode.react';
 import {POSTER_LOCALES, posterAvailability, posterPrice, resolvePosterText, type PosterCopy, type PosterLocale} from '@/core/poster-i18n';
 
 /** What BATYEO designs for a venue. The partner never edits this. */
-export interface PosterBranding {logoUrl: string | null; backgroundUrl: string | null; primary: string; accent: string; locales: PosterLocale[]; copy: Partial<Record<PosterLocale, PosterCopy>>}
+export interface PosterBranding {logoUrl: string | null; backgroundUrl: string | null; primary: string; accent: string; locales: PosterLocale[]; copy: Partial<Record<PosterLocale, PosterCopy>>; layout?: 'classic' | 'arcade'}
 /** What the poster reads live, so it can never advertise a price or a stock the station doesn't have. */
 export interface PosterLive {venueName: string; city: string; online: boolean; available: number; hourlyCents: number; capCents: number; depositCents: number; qrTarget: string}
 export {POSTER_THEMES} from '@/core/screen';
@@ -94,8 +94,7 @@ function Sparkles() {
  return <div className="kp-sparkles" aria-hidden="true">{[[8, 18, 0], [46, 8, 1.2], [63, 86, .6], [95, 30, 1.8], [30, 92, 2.4], [80, 62, 3]].map(([x, y, d], i) => <i key={i} style={{left: `${x}%`, top: `${y}%`, animationDelay: `${d}s`}}/>)}</div>;
 }
 
-export function KioskPoster({branding, live, onInteract}: {branding: PosterBranding; live: PosterLive; onInteract?: () => void}) {
- const level = useCharge();
+function usePosterLocale(branding: PosterBranding, onInteract?: () => void) {
  const locales: PosterLocale[] = branding.locales.length ? branding.locales : ['fr-FR'];
  const [chosen, setChosen] = useState<PosterLocale | null>(null);
  const locale = chosen && locales.includes(chosen) ? chosen : locales[0];
@@ -105,6 +104,16 @@ export function KioskPoster({branding, live, onInteract}: {branding: PosterBrand
   return () => clearTimeout(timer);
  }, [chosen]);
  const choose = (l: PosterLocale) => { setChosen(l === locales[0] ? null : l); onInteract?.(); };
+ return {locales, locale, choose};
+}
+
+export function KioskPoster(props: {branding: PosterBranding; live: PosterLive; onInteract?: () => void}) {
+ return props.branding.layout === 'arcade' ? <ArcadePoster {...props}/> : <ClassicPoster {...props}/>;
+}
+
+function ClassicPoster({branding, live, onInteract}: {branding: PosterBranding; live: PosterLive; onInteract?: () => void}) {
+ const level = useCharge();
+ const {locales, locale, choose} = usePosterLocale(branding, onInteract);
 
  const {strings: t, headlines, tagline} = resolvePosterText(locale, branding.copy[locale]);
  const hero = headlines[0];
@@ -267,6 +276,127 @@ const POSTER_CSS = `
 @keyframes kp-pulse{0%,100%{transform:scale(1);opacity:.9}50%{transform:scale(1.12);opacity:1}}
 @keyframes kp-blink{0%,100%{opacity:1}50%{opacity:.25}}
 @media (prefers-reduced-motion:reduce){.kp-bg,.kp-rays,.kp-sparkles i,.kp-wave,.kp-bolt,.kp-stock i,.kp-stick,.kp-phone,.kp-qr::after,.kp-scene-bg{animation:none}}
+`;
+
+/**
+ * The « arcade » poster: a party venue's own look (bowling, laser game, club) — venue logo and town
+ * top left, a two-line shout, a yellow band, three circled steps. The QR takes the place a picture
+ * of the cabinet would have: the customer is standing in front of the real one. Step one says scan,
+ * never « pay contactless »: the card is taken on the customer's phone, the cabinet has no reader.
+ */
+function ArcadePoster({branding, live, onInteract}: {branding: PosterBranding; live: PosterLive; onInteract?: () => void}) {
+ const level = useCharge();
+ const {locales, locale, choose} = usePosterLocale(branding, onInteract);
+ const {strings: t, headlines, tagline} = resolvePosterText(locale, branding.copy[locale], 'arcade');
+ const steps: [string, keyof typeof ICONS][] = [[t.arcadeStep1, 'qr'], [t.arcadeStep2, 'battery'], [t.arcadeStep3, 'phone']];
+ const step = useCycle(steps.length, STEP_MS);
+ const canRent = live.online && live.available > 0;
+ const vars = {'--kp-primary': branding.primary, '--kp-accent': branding.accent} as React.CSSProperties;
+ const photo = branding.backgroundUrl ? {backgroundImage: `url(${JSON.stringify(branding.backgroundUrl)})`} : undefined;
+ return (
+  <div className="kp-frame ka-frame" style={vars} lang={locale}>
+   <style>{POSTER_CSS + ARCADE_CSS}</style>
+   <div className={'ka-bg' + (photo ? ' has-photo' : '')} style={photo}/>
+   <div className="ka-shade"/>
+   <Sparkles/>
+   <div className="ka-poster">
+    <header className="ka-top">
+     <div className="ka-venue">
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      {branding.logoUrl ? <img src={branding.logoUrl} alt={live.venueName}/> : <span className="ka-venue-name">{live.venueName}</span>}
+      {live.city && <span className="ka-city">{live.city}</span>}
+     </div>
+     {locales.length > 1 && <nav className="kp-langs ka-langs" aria-label="Langue · Language">{locales.map(l => <button type="button" key={l} lang={l} className={l === locale ? 'is-on' : ''} onClick={() => choose(l)}>{POSTER_LOCALES.find(p => p.locale === l)?.code}</button>)}</nav>}
+    </header>
+
+    <section className="ka-left">
+     <h1 key={'h' + locale} className={'ka-hero' + (headlines[0].length > 20 ? ' is-long' : '')}>{headlines[0]}</h1>
+     {headlines[1] && <p key={'k' + locale} className={'ka-kicker' + (headlines[1].length > 18 ? ' is-long' : '')}>{headlines[1]}</p>}
+     <p key={'p' + locale} className="ka-pill">{tagline}</p>
+    </section>
+
+    <section className="ka-visual" aria-hidden="true">
+     <div className="ka-orbit"/>
+     <div className="kp-phone ka-phone">
+      <div className="kp-notch"/>
+      <div className="kp-scene is-on">
+       <Battery level={level} accent={branding.accent}/>
+       <p className="kp-level">{level}<small>%</small></p>
+      </div>
+     </div>
+     <div className="ka-bank"><span className="ka-bank-bolt"><Icon name="battery"/></span><span className="ka-bank-led"/></div>
+    </section>
+
+    <section className="ka-right">
+     {canRent ? (
+      <>
+       <div className="kp-qr ka-qr"><QRCodeSVG value={live.qrTarget} size={512} bgColor="#ffffff" fgColor="#0b0b0b" style={{width: '100%', height: '100%'}}/></div>
+       <p className="ka-scan">{t.scan}</p>
+       <p className="ka-price"><b>{posterPrice(locale, live.hourlyCents)}</b> {t.perHour} · <b>{posterPrice(locale, live.capCents)}</b> {t.capDay.replace('\n', ' ')}</p>
+       <p className="kp-stock ka-stock"><i/>{posterAvailability(locale, live.available)}</p>
+      </>
+     ) : (
+      <div className="kp-unavailable">{live.online ? t.allRented : t.offline}</div>
+     )}
+    </section>
+
+    <footer className="ka-steps">
+     {steps.map(([label, icon], i) => <div key={i} className={'ka-step' + (i === step ? ' is-on' : '')}>
+      {i > 0 && <span className="ka-chevron" aria-hidden="true">›</span>}
+      <div className="ka-step-body"><span className="ka-step-ico"><Icon name={icon}/></span><span className="ka-step-label"><em>{i + 1}.</em> {label}</span></div>
+     </div>)}
+     <span className="ka-brand">BATYEO</span>
+    </footer>
+   </div>
+  </div>
+ );
+}
+
+// Montserrat Black Italic for the white shout, Luckiest Guy for the yellow one: the two faces of the original visual.
+const ARCADE_CSS = `
+@import url('https://fonts.googleapis.com/css2?family=Montserrat:ital,wght@1,800;1,900&family=Luckiest+Guy&display=swap');
+.ka-frame{background:#07041a;box-shadow:none;font-family:Montserrat,'Arial Black',Arial,sans-serif}
+.ka-bg{position:absolute;inset:-4%;background:radial-gradient(circle at 62% 18%,rgba(90,70,255,.55),transparent 32%),radial-gradient(circle at 90% 70%,rgba(0,170,255,.35),transparent 30%),radial-gradient(circle at 30% 8%,rgba(214,60,255,.45),transparent 28%),radial-gradient(circle at 12% 88%,rgba(120,40,255,.35),transparent 35%),linear-gradient(180deg,#140a3a,#07041a 70%);background-size:cover;background-position:center;animation:kp-drift 26s ease-in-out infinite alternate}
+.ka-bg.has-photo{filter:saturate(1.25)}
+.ka-shade{position:absolute;inset:0;background:linear-gradient(90deg,rgba(6,3,22,.92) 0%,rgba(6,3,22,.72) 42%,rgba(6,3,22,.25) 70%,rgba(6,3,22,.6) 100%),linear-gradient(0deg,rgba(0,0,0,.75),transparent 38%)}
+.ka-poster{position:absolute;inset:0;z-index:1;display:grid;grid-template-columns:47cqw 1fr 23cqw;grid-template-rows:auto minmax(0,1fr) auto;column-gap:1.5cqw;padding:2.2cqw 3cqw 2cqw}
+.ka-top{grid-column:1/-1;display:flex;align-items:flex-start;justify-content:space-between}
+.ka-venue{display:flex;flex-direction:column;align-items:flex-end;height:11cqw;max-width:24cqw}
+.ka-venue img{max-height:100%;max-width:100%;object-fit:contain;filter:drop-shadow(0 0 .8cqw rgba(0,0,0,.7))}
+.ka-venue-name{font-family:'Luckiest Guy',Impact,sans-serif;font-size:4.6cqw;line-height:1;color:var(--kp-accent);transform:rotate(-6deg);-webkit-text-stroke:.12cqw #1a1200;text-shadow:.25cqw .3cqw 0 #1a1200,0 0 2cqw color-mix(in srgb,var(--kp-accent) 45%,transparent)}
+.ka-city{margin-top:.2cqw;font-size:1.5cqw;font-weight:900;font-style:italic;color:#fff;text-shadow:0 .15cqw .4cqw rgba(0,0,0,.8)}
+.ka-langs{align-self:flex-start}
+.ka-left{display:flex;flex-direction:column;justify-content:center;gap:1.2cqw;min-width:0}
+.ka-hero{margin:0;font-family:Montserrat,'Arial Black',sans-serif;font-weight:900;font-style:italic;font-size:6.8cqw;line-height:.92;text-transform:uppercase;letter-spacing:-.01em;color:#fff;text-shadow:.3cqw .35cqw 0 #1b1340,0 0 2.2cqw rgba(120,90,255,.55);animation:kp-slide .7s cubic-bezier(.2,1.4,.4,1) both}
+.ka-kicker{margin:0;font-family:'Luckiest Guy',Impact,sans-serif;font-size:5.4cqw;line-height:1;text-transform:uppercase;color:var(--kp-accent);transform:rotate(-3deg);transform-origin:left;text-shadow:.3cqw .35cqw 0 #2a1d00,0 0 2cqw color-mix(in srgb,var(--kp-accent) 55%,transparent);animation:kp-flicker 1.4s ease-out both}
+.ka-pill{margin:.4cqw 0 0;align-self:flex-start;background:var(--kp-accent);color:#0b0620;font-weight:900;font-style:italic;font-size:1.9cqw;text-transform:uppercase;letter-spacing:.01em;border-radius:99cqw;padding:.7cqw 2.2cqw;box-shadow:0 0 2cqw color-mix(in srgb,var(--kp-accent) 55%,transparent);animation:kp-pop .6s .2s cubic-bezier(.2,1.5,.4,1) both}
+.ka-visual{position:relative;align-self:center;justify-self:center;width:100%;height:34cqw;display:grid;place-items:center}
+.ka-orbit{position:absolute;width:24cqw;height:9cqw;border-radius:50%;border:.3cqw solid color-mix(in srgb,var(--kp-accent) 85%,transparent);box-shadow:0 0 1.6cqw var(--kp-accent);transform:rotate(-14deg);animation:ka-orbit 3s ease-in-out infinite}
+.ka-phone{height:30cqw;box-shadow:0 0 0 .18cqw rgba(160,140,255,.8),0 0 3cqw rgba(120,90,255,.6),0 2cqw 3cqw rgba(0,0,0,.6)}
+.ka-bank{position:absolute;right:-2.5cqw;bottom:-3.2cqw;width:15cqw;height:6.4cqw;border-radius:1.4cqw;background:linear-gradient(90deg,var(--kp-accent) 0 18%,#141414 18% 82%,var(--kp-accent) 82%);box-shadow:0 0 2cqw color-mix(in srgb,var(--kp-accent) 60%,transparent),inset 0 0 .8cqw rgba(255,255,255,.15);transform:rotate(-16deg);display:flex;align-items:center;justify-content:center;gap:2cqw;animation:kp-float 4s ease-in-out infinite}
+.ka-bank-bolt{display:grid;place-items:center;width:3cqw;height:3cqw;color:var(--kp-accent)}
+.ka-bank-bolt svg{width:2.4cqw;height:2.4cqw}
+.ka-bank-led{width:1.4cqw;height:1.4cqw;border-radius:50%;border:.25cqw solid #4aa8ff;box-shadow:0 0 .8cqw #4aa8ff}
+.ka-right{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:.9cqw;min-width:0}
+.ka-qr{max-width:19cqw}
+.ka-scan{margin:0;font-family:'Luckiest Guy',Impact,sans-serif;font-size:2.4cqw;line-height:1;text-align:center;text-transform:uppercase;color:#fff;text-shadow:.2cqw .25cqw 0 #1b1340}
+.ka-price{margin:0;font-size:1.15cqw;font-weight:800;text-align:center;color:#e9e6ff}
+.ka-price b{color:var(--kp-accent);font-size:1.5cqw}
+.ka-stock{font-size:1.2cqw}
+.ka-steps{grid-column:1/-1;display:flex;align-items:flex-end;gap:1.4cqw;margin-top:.8cqw}
+.ka-step{display:flex;align-items:center;gap:1.4cqw}
+.ka-chevron{font-size:4cqw;line-height:1;font-weight:900;color:var(--kp-accent);margin-bottom:3cqw}
+.ka-step-body{display:flex;flex-direction:column;align-items:center;gap:.6cqw}
+.ka-step-ico{display:grid;place-items:center;width:8cqw;height:8cqw;border-radius:50%;border:.35cqw solid var(--kp-accent);background:rgba(10,6,32,.75);color:#fff;transition:all .5s}
+.ka-step-ico svg{width:4cqw;height:4cqw}
+.ka-step-label{font-size:1.45cqw;font-weight:900;font-style:italic;text-transform:uppercase;color:#fff;white-space:nowrap}
+.ka-step-label em{color:var(--kp-accent);font-style:italic}
+.ka-step.is-on .ka-step-ico{background:var(--kp-accent);color:#0b0620;transform:scale(1.08);box-shadow:0 0 2cqw color-mix(in srgb,var(--kp-accent) 70%,transparent)}
+.ka-brand{margin-left:auto;align-self:center;font-weight:900;font-size:2cqw;letter-spacing:.12em;color:#fff;border-left:.15cqw solid rgba(255,255,255,.6);padding-left:1.6cqw}
+/* A longer translation or a venue's own wording shrinks instead of pushing the steps off the screen. */
+.ka-hero.is-long{font-size:5.4cqw}.ka-kicker.is-long{font-size:4.2cqw}
+@keyframes ka-orbit{0%,100%{opacity:.9;transform:rotate(-14deg) scale(1)}50%{opacity:.5;transform:rotate(-14deg) scale(1.06)}}
+@media (prefers-reduced-motion:reduce){.ka-bg,.ka-orbit,.ka-bank{animation:none}}
 `;
 
 /** A venue's own offer, dressed in its colours. The QR stays in the corner: a promo slide never costs a rental. */

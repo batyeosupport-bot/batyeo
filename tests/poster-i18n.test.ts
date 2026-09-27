@@ -22,3 +22,11 @@ test('French question marks never wrap alone, and availability picks singular or
  assert.equal(posterAvailability('fr-FR', 1), '1 batterie disponible');
  assert.equal(posterAvailability('en-GB', 3), '3 batteries available');
 });
+
+test('the arcade poster has its own party wording in every language, and a venue override still wins', () => {
+ assert.deepEqual(resolvePosterText('fr-FR', undefined, 'arcade').headlines, ['Plus de batterie\u00a0?', 'La fête continue.']);
+ assert.equal(resolvePosterText('fr-FR', undefined, 'arcade').tagline, 'Loue ta batterie en quelques secondes');
+ assert.equal(resolvePosterText('en-GB', {headlines: ['Strike night?'], tagline: 'Bowling till 2am'}, 'arcade').headlines[0], 'Strike night?');
+ // Step one is scanning, never paying contactless: the card is taken on the customer's phone.
+ for (const {locale} of POSTER_LOCALES) assert.doesNotMatch(POSTER_STRINGS[locale].arcadeStep1, /contact/i, locale);
+});

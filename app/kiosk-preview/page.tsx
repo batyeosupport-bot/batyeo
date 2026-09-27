@@ -1,9 +1,9 @@
 'use client';
-import {useState} from 'react';
+import {useEffect, useState} from 'react';
 import {KioskPoster, KioskPromo, POSTER_THEMES, type PosterBranding} from '@/components/batyeo/kiosk-poster';
 import {POSTER_LOCALES, POSTER_STRINGS, type PosterCopy, type PosterLocale} from '@/core/poster-i18n';
 import {DEFAULT_PRICING} from '@/core/pricing';
-import type {PosterTheme} from '@/core/screen';
+import {posterLayout, type PosterTheme} from '@/core/screen';
 
 // Files picked here stay in this browser (object URLs): nothing is uploaded while BATYEO tries a design.
 function pickFile(onPick: (url: string | null) => void) {
@@ -16,9 +16,23 @@ function pickFile(onPick: (url: string | null) => void) {
 export default function KioskPreviewPage() {
  const [theme, setTheme] = useState<PosterTheme>('sport');
  const [venueName, setVenueName] = useState('Le Comptoir');
+ const [city, setCity] = useState('Paris');
  const [logoUrl, setLogoUrl] = useState<string | null>(null);
  const [backgroundUrl, setBackgroundUrl] = useState<string | null>(null);
  const [locales, setLocales] = useState<PosterLocale[]>(['fr-FR', 'en-GB', 'es-ES']);
+ // ?style=arcade&lieu=Smile%20World&ville=Montigny(&langue=en-GB) opens a ready-made mock-up, handy to show a prospect.
+ useEffect(() => {
+  const query = new URLSearchParams(window.location.search);
+  const style = query.get('style'), lieu = query.get('lieu'), ville = query.get('ville');
+  const timer = setTimeout(() => {
+   if (style && style in POSTER_THEMES) setTheme(style as PosterTheme);
+   if (lieu) setVenueName(lieu.slice(0, 60));
+   if (ville !== null) setCity(ville.slice(0, 40));
+   const langue = query.get('langue');
+   if (langue && POSTER_LOCALES.some(l => l.locale === langue)) setLocales([langue as PosterLocale]);
+  }, 0);
+  return () => clearTimeout(timer);
+ }, []);
  const [editLocale, setEditLocale] = useState<PosterLocale>('fr-FR');
  const [copy, setCopy] = useState<Partial<Record<PosterLocale, PosterCopy>>>({});
  const [available, setAvailable] = useState(4);
@@ -33,8 +47,8 @@ export default function KioskPreviewPage() {
   if (next.length) setLocales(next);
  };
 
- const branding: PosterBranding = {logoUrl, backgroundUrl, primary: POSTER_THEMES[theme].primary, accent: POSTER_THEMES[theme].accent, locales, copy};
- const live = {venueName, city: 'Paris', online, available, hourlyCents: DEFAULT_PRICING.hourlyCents, capCents: DEFAULT_PRICING.capCents, depositCents: DEFAULT_PRICING.depositCents, qrTarget: 'https://batyeo.vercel.app/rent/apercu'};
+ const branding: PosterBranding = {logoUrl, backgroundUrl, primary: POSTER_THEMES[theme].primary, accent: POSTER_THEMES[theme].accent, layout: posterLayout(theme), locales, copy};
+ const live = {venueName, city, online, available, hourlyCents: DEFAULT_PRICING.hourlyCents, capCents: DEFAULT_PRICING.capCents, depositCents: DEFAULT_PRICING.depositCents, qrTarget: 'https://batyeo.vercel.app/rent/apercu'};
 
  return (
   <main style={styles.page}>
@@ -53,6 +67,7 @@ export default function KioskPreviewPage() {
      </select>
     </label>
     <label style={styles.field}>Nom du bar<input value={venueName} onChange={e => setVenueName(e.target.value)} style={styles.input}/></label>
+    <label style={styles.field}>Ville (affichée sous le logo en style Arcade)<input value={city} onChange={e => setCity(e.target.value)} style={styles.input}/></label>
     <label style={styles.field}>Logo du bar<input type="file" accept="image/*" onChange={pickFile(setLogoUrl)} style={{maxWidth: '100%'}}/></label>
     <label style={styles.field}>Photo de fond<input type="file" accept="image/*" onChange={pickFile(setBackgroundUrl)} style={{maxWidth: '100%'}}/></label>
     <fieldset style={styles.fieldset}>
@@ -72,10 +87,10 @@ export default function KioskPreviewPage() {
      <span style={styles.hint}>Laisse vide pour garder le texte traduit par défaut (affiché en gris).</span>
     </label>
     <label style={styles.field}>Phrases d’accroche (une par ligne, elles défilent)
-     <textarea rows={3} value={edited.headlines.join('\n')} onChange={e => editCopy({headlines: e.target.value.split('\n')})} placeholder={[defaults.headline1, defaults.headline2, defaults.headline3].join('\n')} style={styles.input}/>
+     <textarea rows={3} value={edited.headlines.join('\n')} onChange={e => editCopy({headlines: e.target.value.split('\n')})} placeholder={(posterLayout(theme) === 'arcade' ? [defaults.arcadeHeadline, defaults.arcadeKicker] : [defaults.headline1, defaults.headline2, defaults.headline3]).join('\n')} style={styles.input}/>
     </label>
     <label style={styles.field}>Sous-titre
-     <input value={edited.tagline} onChange={e => editCopy({tagline: e.target.value})} placeholder={defaults.tagline} style={styles.input}/>
+     <input value={edited.tagline} onChange={e => editCopy({tagline: e.target.value})} placeholder={posterLayout(theme) === 'arcade' ? defaults.arcadePill : defaults.tagline} style={styles.input}/>
     </label>
    </form>
   </main>

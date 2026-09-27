@@ -7,7 +7,10 @@ export const POSTER_THEMES={
  lounge:{label:'Lounge',primary:'#140f0a',accent:'#f3c969'},
  hotel:{label:'Hôtel',primary:'#0d1a2e',accent:'#f4ead6'},
  batyeo:{label:'BATYEO',primary:'#19382c',accent:'#d8ed98'},
+ arcade:{label:'Arcade néon (jaune)',primary:'#0b0620',accent:'#ffd21f',layout:'arcade'},
 } as const;
+export type PosterLayout='classic'|'arcade';
+export const posterLayout=(theme:PosterTheme):PosterLayout=>{const t=POSTER_THEMES[theme] as {layout?:PosterLayout}|undefined;return t?.layout??'classic';};
 export type PosterTheme=keyof typeof POSTER_THEMES;
 export const POSTER_THEME_KEYS=Object.keys(POSTER_THEMES) as PosterTheme[];
 export const ALL_POSTER_LOCALES=POSTER_LOCALES.map(l=>l.locale) as PosterLocale[];
@@ -93,6 +96,6 @@ export function posterFor(d:Data,publicId:string,now=Date.now()){
  const theme=POSTER_THEMES[branding.theme]??POSTER_THEMES.batyeo;
  const promos=d.promos.filter(p=>p.venueId===venue.id&&promoLiveAt(p,now)).sort((a,b)=>a.createdAt-b.createdAt)
   .map(p=>({id:p.id,title:p.title,subtitle:p.subtitle,highlight:p.highlight,imageUrl:p.imageUrl,durationMs:p.durationMs,schedule:promoScheduleLabel(p)}));
- return {venueName:venue.name,branding:{logoUrl:branding.logoUrl,backgroundUrl:branding.backgroundUrl,primary:theme.primary,accent:theme.accent,locales:branding.locales.length?branding.locales:ALL_POSTER_LOCALES,copy:branding.copy},promos};
+ return {venueName:venue.name,branding:{logoUrl:branding.logoUrl,backgroundUrl:branding.backgroundUrl,primary:theme.primary,accent:theme.accent,layout:posterLayout(POSTER_THEMES[branding.theme]?branding.theme:'batyeo'),locales:branding.locales.length?branding.locales:ALL_POSTER_LOCALES,copy:branding.copy},promos};
 }
 export type PosterPayload=NonNullable<ReturnType<typeof posterFor>>;
