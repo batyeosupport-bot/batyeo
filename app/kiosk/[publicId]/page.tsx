@@ -53,7 +53,8 @@ export default function KioskPage({params}: {params: Promise<{publicId: string}>
   <main style={styles.screen} onPointerDown={slide.kind === 'poster' ? undefined : hold}>
    {display?.maintenanceBanner && <div style={styles.banner}>{display.maintenanceBanner}</div>}
    {loading && <p style={styles.status}>{t('kiosk_loading')}</p>}
-   {!loading && error && <p style={styles.error}>{t('kiosk_connectionLost')}</p>}
+   {/* A network blip keeps the last poster up: the QR works on the customer's own phone network anyway. */}
+   {!loading && error && !station && <p style={styles.error}>{t('kiosk_connectionLost')}</p>}
    {!loading && !error && !station && <p style={styles.error}>{t('kiosk_stationNotFound', {publicId})}</p>}
    {station && poster && data && (
     <div style={styles.stage}>

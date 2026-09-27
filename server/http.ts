@@ -84,7 +84,10 @@ async function refreshFromCabinets(minGapMs:number){
  if(!snapshot.stationProviderLinks.some(link=>link.active))return;
  const newest=Math.max(0,...snapshot.manufacturerSyncRuns.map(run=>run.startedAt));
  if(Date.now()-newest<minGapMs)return;
- await Promise.race([manufacturerSync.run({trigger:'ON_DEMAND'}).catch(()=>undefined),new Promise(resolve=>setTimeout(resolve,5_000))]);
+ // A card form left open blocks the inventory mirror at its station (a rental may be starting there): an
+ // abandoned one used to hold it until the nightly job. Expired here first, on the same throttle.
+ const work=(async()=>{if(stripeCoordinator)await stripeCoordinator.expireStale(repository).catch(()=>0);await manufacturerSync!.run({trigger:'ON_DEMAND'}).catch(()=>undefined);})();
+ await Promise.race([work,new Promise(resolve=>setTimeout(resolve,5_000))]);
 }
 async function route(request:Request,path:string){
  if(startupError)throw startupError;

@@ -223,3 +223,19 @@ test('expiry survives a half-finished earlier attempt: an intent Stripe already 
  assert.equal(await c2.expireStale(repo2,1_000+STALE_UNCONFIRMED_MS),0);
  assert.equal(repo2.data.rentals.find(r=>r.id===second.rental.id)!.state,'CREATED');
 });
+
+test('a card form left open is expired by the next site visit, not at 3 am: until then it froze the stock mirror at its station',async()=>{
+ const {linkManufacturerStation}=await import('../core/manufacturer-sync');
+ const {ManufacturerError}=await import('../core/manufacturer');
+ const stripe=fakeStripe(),repo=seeded(),coordinator=new StripeRentalCoordinator(stripe.provider);
+ const {rental}=await coordinator.begin(repo,'walked-away','paris-demo','k-abandon',Date.now()-20*60_000);
+ assert.equal(rental.state,'CREATED');
+ linkManufacturerStation(repo.data,'station-paris','BAJIE','DTA1',Date.now());
+ const provider={listDevices:async()=>[],getDeviceInfo:async()=>{throw new ManufacturerError('offline',504,'TIMEOUT');}};
+ await withStripeEnv({PAYMENT_PROVIDER:'stripe_test',STRIPE_SECRET_KEY:'sk_test_x',STRIPE_PUBLISHABLE_KEY:'pk_test_x'},async()=>{
+  const visit=await createApi(repo,{demo:false,allowLegacyCredentials:false},{stripeProvider:stripe.provider,manufacturerProvider:provider}).GET(new Request('https://batyeo.test/api/core/public'),{params:Promise.resolve({path:['public']})});
+  assert.equal(visit.status,200);
+ });
+ assert.equal(repo.data.rentals.find(r=>r.id===rental.id)!.state,'EXPIRED');
+ assert.equal(stripe.intents.get(repo.data.payments.find(p=>p.rentalId===rental.id)!.providerReference!)!.status,'canceled','the Stripe intent is cancelled first');
+});
