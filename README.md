@@ -1,6 +1,6 @@
 # BATYEO — Web Ecosystem, phase 1
 
-Produit de démonstration fonctionnel : site public, location web QR, Admin, Partner, moteurs métier et simulateurs. Aucun paiement ni matériel réel.
+Site public, location web par QR, Admin, Partner et moteurs métier. Le déploiement Vercel/PostgreSQL prend les paiements par carte via Stripe (mode test aujourd'hui) et lit la vraie borne ChargeNow en lecture seule ; la sortie physique des batteries reste désactivée (`MANUFACTURER_ALLOW_PHYSICAL_ACTIONS=false`). La mise en service réelle suit `docs/GO_LIVE.md` ; `pnpm release:readiness` résume ce qui reste bloquant.
 
 ## Démarrer
 
@@ -30,7 +30,7 @@ pnpm build
 | Partner A | partner@batyeo.demo | BatyeoDemo!2026 |
 | Partner B | partner-b@batyeo.demo | BatyeoDemo!2026 |
 
-Autres comptes : operations@batyeo.demo, finance@batyeo.demo, support@batyeo.demo, partner_user@batyeo.demo (même mot de passe). Les rôles sont contrôlés côté serveur. Les comptes partenaires A et B sont isolés.
+La page de connexion n'affiche ces identifiants que sur un serveur lancé en mode démo (`runtimeOptions.demo`). Sur une base réelle, verrouiller ces comptes avec `pnpm db:bootstrap -- --retire-demo` (voir `docs/GO_LIVE.md`, section 3). Autres comptes : operations@batyeo.demo, finance@batyeo.demo, support@batyeo.demo, partner_user@batyeo.demo (même mot de passe). Les rôles sont contrôlés côté serveur. Les comptes partenaires A et B sont isolés.
 
 ## Démonstration du golden flow
 

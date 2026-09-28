@@ -143,3 +143,43 @@ test('simply visiting the site notices an unplugged cabinet — at most once per
  await visit();
  assert.ok(reads>afterFirst,'once the window has passed, the next visitor refreshes again');
 });
+
+test('with a mailer, a rental cannot start without an address: an unreachable customer could never be charged for a lost battery',async()=>{
+ const repo=new MemoryRepository(seedData('x')),mailer=new FakeMailer(),origin='https://batyeo.test';
+ const api=()=>createApi(repo,{demo:false,allowLegacyCredentials:false},{mailConfig:{mailer,opsEmail:null}});
+ const first=await api().GET(new Request(origin+'/api/core/customer'),{params:Promise.resolve({path:['customer']})});
+ const token=first.headers.get('set-cookie')!.match(/batyeo_customer=([a-zA-Z0-9-]+)/)![1];
+ const start=(extra:Record<string,string>)=>api().POST(new Request(origin+'/api/core/start',{method:'POST',headers:{origin,'content-type':'application/json',cookie:`batyeo_customer=${token}`},body:JSON.stringify({stationPublicId:'paris-demo',termsAccepted:true,idempotencyKey:crypto.randomUUID(),...extra})}),{params:Promise.resolve({path:['start']})});
+ const count=repo.data.rentals.length;
+ const refused=await start({});
+ assert.equal(refused.status,400);assert.match((await refused.json() as {error:string}).error,/email/);
+ assert.equal(repo.data.rentals.length,count);
+ assert.equal((await start({contactEmail:'client@exemple.fr'})).status,200);
+ assert.equal(repo.data.rentals.length,count+1);
+});
+
+test('live payments refuse to run without a mailer',async()=>{
+ const saved={p:process.env.PAYMENT_PROVIDER,k:process.env.STRIPE_SECRET_KEY};
+ process.env.PAYMENT_PROVIDER='stripe_live';process.env.STRIPE_SECRET_KEY='sk_live_placeholder';
+ try{
+  const response=await createApi(new MemoryRepository(seedData('x')),{demo:false,allowLegacyCredentials:false}).GET(new Request('https://batyeo.test/api/core/public'),{params:Promise.resolve({path:['public']})});
+  assert.equal(response.status,503);assert.match((await response.json() as {error:string}).error,/RESEND_API_KEY/);
+ }finally{
+  if(saved.p===undefined)delete process.env.PAYMENT_PROVIDER;else process.env.PAYMENT_PROVIDER=saved.p;
+  if(saved.k===undefined)delete process.env.STRIPE_SECRET_KEY;else process.env.STRIPE_SECRET_KEY=saved.k;
+ }
+});
+
+test('a returning customer, same device, gets their last email back — but never someone else\'s',async()=>{
+ const repo=new MemoryRepository(seedData('x')),origin='https://batyeo.test';
+ const api=()=>createApi(repo,{demo:false,allowLegacyCredentials:false});
+ const first=await api().GET(new Request(origin+'/api/core/customer'),{params:Promise.resolve({path:['customer']})});
+ const token=first.headers.get('set-cookie')!.match(/batyeo_customer=([a-zA-Z0-9-]+)/)![1];
+ assert.equal((await first.json() as {lastContactEmail:string|null}).lastContactEmail,null);
+ const start=await api().POST(new Request(origin+'/api/core/start',{method:'POST',headers:{origin,'content-type':'application/json',cookie:`batyeo_customer=${token}`},body:JSON.stringify({stationPublicId:'paris-demo',termsAccepted:true,idempotencyKey:crypto.randomUUID(),contactEmail:'returning@exemple.fr'})}),{params:Promise.resolve({path:['start']})});
+ assert.equal(start.status,200);
+ const second=await api().GET(new Request(origin+'/api/core/customer',{headers:{cookie:`batyeo_customer=${token}`}}),{params:Promise.resolve({path:['customer']})});
+ assert.equal((await second.json() as {lastContactEmail:string|null}).lastContactEmail,'returning@exemple.fr');
+ const otherDevice=await api().GET(new Request(origin+'/api/core/customer'),{params:Promise.resolve({path:['customer']})});
+ assert.equal((await otherDevice.json() as {lastContactEmail:string|null}).lastContactEmail,null);
+});

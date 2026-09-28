@@ -8,6 +8,7 @@ import {DomainError,MockBatteryStationProvider} from '../core/providers';
 import {verifyStripeSignature,StripePaymentProvider,createTerminalConnectionToken,createTerminalLocation,listTerminalLocations} from '../core/stripe';
 import {StripeRentalCoordinator,type AsyncBatteryEjector} from '../core/stripe-coordinator';
 import {resolvePaymentMode,type PaymentMode} from '../core/payment-mode';
+import {resolveOperator} from '../core/operator';
 import {ManufacturerBatteryEjector,ManufacturerBatteryStationProvider,ManufacturerHttpClient,reconcileManufacturerStation,resolveManufacturerConfig,validateManufacturerStartup} from '../core/manufacturer';
 import {ManufacturerSyncService,linkManufacturerStation,moveManufacturerLink} from '../core/manufacturer-sync';
 import {resolveMailer,type MailConfig} from '../core/mailer';
@@ -64,7 +65,9 @@ export function createApi(repository:Repository,options:{demo:boolean;allowLegac
   // a live publishable key next to a test secret key (or the reverse) would create intents the browser
   // can never confirm — or worse, put test cards against real money — so a mismatch stops the server.
   const pk=(runtimeEnv as Record<string,string|undefined>).STRIPE_PUBLISHABLE_KEY?.trim();
-  if(paymentMode!=='mock'&&pk){const expectedPrefix=paymentMode==='stripe_live'?'pk_live_':'pk_test_';if(!pk.startsWith(expectedPrefix))throw new DomainError(`STRIPE_PUBLISHABLE_KEY doit commencer par ${expectedPrefix} pour le mode ${paymentMode}.`,503);publishableKey=pk;}mailConfig=dependencies.mailConfig??resolveMailer(runtimeEnv);const manufacturerClient=manufacturerConfig?new ManufacturerHttpClient(manufacturerConfig):undefined;
+  if(paymentMode!=='mock'&&pk){const expectedPrefix=paymentMode==='stripe_live'?'pk_live_':'pk_test_';if(!pk.startsWith(expectedPrefix))throw new DomainError(`STRIPE_PUBLISHABLE_KEY doit commencer par ${expectedPrefix} pour le mode ${paymentMode}.`,503);publishableKey=pk;}mailConfig=dependencies.mailConfig??resolveMailer(runtimeEnv);
+  if(paymentMode==='stripe_live'&&!mailConfig)throw new DomainError('Le paiement réel exige RESEND_API_KEY et MAIL_FROM : sans avertissement envoyé, aucune batterie perdue ne peut être facturée.',503);
+  const manufacturerClient=manufacturerConfig?new ManufacturerHttpClient(manufacturerConfig):undefined;
   manufacturerProvider=dependencies.manufacturerProvider??(manufacturerClient?new ManufacturerBatteryStationProvider(manufacturerClient):undefined);
   manufacturerSync=manufacturerProvider?new ManufacturerSyncService(repository,manufacturerProvider,{onReturnDetected:async(c,at)=>{const closed=await(stripeCoordinator?stripeCoordinator.return(repository,c.rentalId,c.stationId,at,true):repository.transaction(d=>engine.return(d,c.rentalId,c.stationId,at,true)));if(mailConfig&&closed.state==='COMPLETED')await deliverNotices(repository,mailConfig.mailer,at,new Set([c.rentalId])).catch(()=>undefined);return closed;}}):undefined;
   // Only ever constructed on an explicit opt-in that validateManufacturerStartup has already found
@@ -206,7 +209,7 @@ async function route(request:Request,path:string){
   const d=await repository.read();const actor=await actorFor(request,d);
   if(path==='health')return reply({status:'ok',demo:options.demo,providers:{payment:paymentMode,station:batteryEjector?'manufacturer':'mock',manufacturer:manufacturerProvider?'read_only':'not_configured'},manufacturerHealth:providerHealth(d),serverTime:Date.now()});
   if(path==='public'){await refreshFromCabinets(PUBLIC_REFRESH_MIN_GAP_MS);}
- if(path==='public')return reply({stations:publicStationViews(await repository.read()).filter(s=>!s.archivedAt),pricing:d.pricing[0],demo:options.demo,payment:paymentMode,emailEnabled:Boolean(mailConfig),cardPayments:Boolean(stripeCoordinator&&publishableKey)});
+ if(path==='public')return reply({stations:publicStationViews(await repository.read()).filter(s=>!s.archivedAt),pricing:d.pricing[0],demo:options.demo,payment:paymentMode,emailEnabled:Boolean(mailConfig),cardPayments:Boolean(stripeCoordinator&&publishableKey),operator:resolveOperator(typeof process!=='undefined'?process.env:{})});
   if(path.startsWith('translations/')){
    const config=displayConfigFor(d,path.split('/')[1]);
    return reply({locale:config.locale,translations:config.translations});
@@ -240,7 +243,10 @@ async function route(request:Request,path:string){
    const fresh=await repository.read();
    const rs=fresh.rentals.filter(r=>r.customerId===customerId).sort((a,b)=>b.createdAt-a.createdAt);
    const current=rs.find(r=>OPEN_STATES.includes(r.state))??rs[0];
-   return reply({rental:current?customerRentalView(fresh,current):null,serverTime:Date.now()},200,token===existing?{}:{'Set-Cookie':setCookie(request,'batyeo_customer',token,CUSTOMER_LIFETIME_MS/1000)});
+   // Returning on the same device within the 7-day cookie: hand back the address this customer already
+   // typed once, so a second rental doesn't ask for it again. Their own data, read back to themselves.
+   const lastContactEmail=rs.find(r=>r.contactEmail)?.contactEmail??null;
+   return reply({rental:current?customerRentalView(fresh,current):null,lastContactEmail,serverTime:Date.now()},200,token===existing?{}:{'Set-Cookie':setCookie(request,'batyeo_customer',token,CUSTOMER_LIFETIME_MS/1000)});
   }
   if(path==='customer/history'){
    const token=customerToken(request);if(!token)throw new DomainError('Session client manquante.',401);const customerId=requireCustomer(d,await sha256(token));return reply({rentals:d.rentals.filter(r=>r.customerId===customerId).sort((a,b)=>b.createdAt-a.createdAt).map(r=>customerRentalView(d,r)),serverTime:Date.now()});
@@ -309,6 +315,8 @@ async function route(request:Request,path:string){
  if(path==='logout'){const token=cookie(request,'batyeo_session');const digest=token?await sha256(token):'';await repository.transaction(d=>{d.sessions=d.sessions.filter(s=>s.id!==digest);});return reply({ok:true},200,{'Set-Cookie':setCookie(request,'batyeo_session','',0)});}
  if(path==='start'){
   const input=z.object({stationPublicId:id,termsAccepted:z.literal(true),idempotencyKey:z.string().uuid(),contactEmail:z.string().trim().email().max(200).optional()}).strict().parse(body);
+  // With a mailer, every rental must be reachable: without a delivered warning a lost battery can never be charged.
+  if(mailConfig&&!input.contactEmail)throw new DomainError('Indiquez votre email : il sert à vous envoyer le reçu et à vous prévenir avant tout débit de la caution.',400);
   const token=customerToken(request)??'';if(!token)throw new DomainError('Rechargez la page pour préparer votre session de location.',400);const digest=await sha256(token);
   let result;
   if(stripeCoordinator){

@@ -35,8 +35,9 @@ ton terminal est la façon la plus simple d'abîmer la production.
 - [ ] **Statut de l'exploitant** : SIRET, IBAN pour recevoir l'argent.
 - [ ] **Assurance** responsabilité civile qui couvre des batteries lithium dans un lieu public.
 - [ ] **Conditions et confidentialité** relues par un juriste. Les pages `/terms` et `/privacy`
-      décrivent le service réel, mais il y manque ton identité, ton adresse, le médiateur de la
-      consommation et le droit de rétractation.
+      décrivent le service réel, la renonciation au droit de rétractation (case à cocher au départ)
+      et affichent ton identité et ton médiateur dès que les variables `OPERATOR_*` sont remplies
+      (section 4).
 - [ ] **Convention écrite avec le bar** : emplacement, prise et réseau, commission, responsabilité en
       cas de vol ou d'incendie, durée, conditions de reprise de la borne.
 - [ ] **Coût réel de la borne et de la batterie de remplacement** (demande à Tony) : c'est ce qui
@@ -112,12 +113,15 @@ Projet → Settings → Environment Variables → environnement **Production**.
 | `MANUFACTURER_PROVIDER` | `bajie` | — |
 | `MANUFACTURER_API_BASE_URL`, `MANUFACTURER_USERNAME`, `MANUFACTURER_PASSWORD` | identifiants ChargeNow | lecture de la borne |
 | `MANUFACTURER_SYNC_SECRET` | une longue chaîne aléatoire | exigé dès que ChargeNow est configuré |
-| `RESEND_API_KEY`, `MAIL_FROM` | clé et adresse d'envoi vérifiées chez Resend | envoi des reçus (**les deux ou aucun**) |
+| `RESEND_API_KEY`, `MAIL_FROM` | clé et adresse d'envoi vérifiées chez Resend | reçus et avertissement avant débit de caution (**les deux ou aucun** ; **obligatoires avec `stripe_live`**, le serveur refuse de démarrer sans) |
 | `OPS_ALERT_EMAIL` | ton adresse | résumé quotidien des alertes |
+| `OPERATOR_NAME`, `OPERATOR_LEGAL_FORM`, `OPERATOR_SIRET`, `OPERATOR_ADDRESS`, `OPERATOR_EMAIL`, `OPERATOR_PHONE` | ton identité d'exploitant (ex. `Entrepreneur individuel`) | affichée dans `/terms` et `/privacy` |
+| `OPERATOR_MEDIATOR_NAME`, `OPERATOR_MEDIATOR_URL` | ton médiateur de la consommation | obligatoire pour un service aux particuliers ; tant que nom, SIRET, adresse, email ou médiateur manque, les pages légales disent « en cours de finalisation » |
 | `MANUFACTURER_ALLOW_PHYSICAL_ACTIONS` | `true` — **en tout dernier** | fait sortir de vraies batteries |
 
-Sans `RESEND_API_KEY`/`MAIL_FROM`, tout fonctionne mais aucun email ne part, et la page de location
-ne demande pas d'adresse (elle ne promet pas ce qu'elle ne peut pas tenir).
+Avec `RESEND_API_KEY`/`MAIL_FROM`, l'email est **obligatoire** pour louer : sans avertissement envoyé,
+une batterie jamais rendue ne peut pas être facturée. Sans eux (mode test ou démo uniquement), aucun
+email ne part et la page de location ne demande pas d'adresse.
 
 Après chaque changement de variable : **Redeploy** (les variables ne s'appliquent qu'au déploiement
 suivant). Puis ouvre **Admin → Système** : les quatre cartes doivent afficher ce que tu attends
