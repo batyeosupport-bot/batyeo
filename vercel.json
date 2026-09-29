@@ -1,5 +1,5 @@
 {
-  "buildCommand": "pnpm prisma generate && pnpm run build:postgres",
+  "buildCommand": "pnpm prisma generate && DIRECT_DATABASE_URL=\"${DIRECT_DATABASE_URL:-$DATABASE_URL}\" pnpm prisma migrate deploy && pnpm run build:postgres",
   "installCommand": "pnpm install --frozen-lockfile",
   "crons": [
     {

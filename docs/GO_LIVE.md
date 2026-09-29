@@ -17,8 +17,10 @@ Tout ce qui peut être fait par le code l'est. Ce document liste ce qu'il reste 
 où le faire est sûr. Chaque étape dit ce qu'elle débloque. Ne saute pas d'étape : les dernières
 font sortir de vraies batteries et prendre de l'argent réel.
 
-**Piège à connaître : migrations avant déploiement.** Vercel déploie le code dès qu'il est poussé,
-mais **ne migre jamais la base**. Si le code attend une colonne que la base n'a pas encore, *toute*
+**Migrations : appliquées automatiquement au build Vercel** (`prisma migrate deploy` dans
+`vercel.json`, sur la base de `DATABASE_URL`). Une migration qui échoue fait échouer le build : la
+version précédente reste en ligne. Ce qui suit ne vaut plus que pour une base migrée à la main.
+Avant ce changement, Vercel déployait le code dès qu'il était poussé mais **ne migrait jamais la base**. Si le code attend une colonne que la base n'a pas encore, *toute*
 l'API répond « service temporairement indisponible » (503). À chaque fois que le dossier
 `prisma/migrations/` s'agrandit : appliquer `pnpm db:migrate` sur la base concernée **avant** (ou
 tout de suite après) le déploiement. Diagnostic : Vercel → Deployments → Logs → chercher la ligne
