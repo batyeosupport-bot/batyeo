@@ -202,7 +202,10 @@ export class StripeRentalCoordinator {
  async return(repository:Repository,rentalId:string,stationId:string,now=Date.now(),detected=false,note?:string):Promise<Rental>{
   const prepared=await repository.transaction(d=>this.engine.prepareReturn(d,rentalId,stationId,now,detected,note));
   if(prepared.state==='COMPLETED')return prepared;
-  const snapshot=await repository.read();const payment=snapshot.payments.find(p=>p.rentalId===rentalId);if(!payment?.providerReference)throw new DomainError('Référence Stripe manquante.',503);
+  const snapshot=await repository.read();const payment=snapshot.payments.find(p=>p.rentalId===rentalId);
+  // Rentals opened before the switch to Stripe carry a simulated authorization: nothing exists at Stripe to capture.
+  if(payment?.provider==='mock')return repository.transaction(d=>this.engine.markPaymentCaptured(d,rentalId,prepared.amountCents,undefined,now));
+  if(!payment?.providerReference)throw new DomainError('Référence Stripe manquante.',503);
   if(payment.status==='CAPTURED')return repository.transaction(d=>this.engine.completeSettlement(d,rentalId,now));
   let intent:StripeIntent;
   try {intent=await this.payment.capture(payment.providerReference,prepared.amountCents,rentalId);}

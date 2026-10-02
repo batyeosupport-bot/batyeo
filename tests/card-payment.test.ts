@@ -239,3 +239,18 @@ test('a card form left open is expired by the next site visit, not at 3 am: unti
  assert.equal(repo.data.rentals.find(r=>r.id===rental.id)!.state,'EXPIRED');
  assert.equal(stripe.intents.get(repo.data.payments.find(p=>p.rentalId===rental.id)!.providerReference!)!.status,'canceled','the Stripe intent is cancelled first');
 });
+
+test('a rental paid before the switch to Stripe settles as simulated, even when a first attempt left it stuck in RETURNED',async()=>{
+ const stripe=fakeStripe(),repo=seeded(),coordinator=new StripeRentalCoordinator(stripe.provider);
+ const legacy=repo.data.rentals.filter(r=>['ACTIVE','OVERDUE'].includes(r.state)&&repo.data.payments.find(p=>p.rentalId===r.id)?.provider==='mock');
+ assert.ok(legacy.length>=2,'the demo seed carries open simulated rentals');
+ const now=Date.now();
+ const closed=await coordinator.return(repo,legacy[0].id,legacy[0].stationId,now,true,'Nettoyage démo');
+ assert.equal(closed.state,'COMPLETED');
+ const stuck=legacy[1];
+ await repo.transaction(d=>{const engine=(coordinator as unknown as {engine:{prepareReturn:(d:Data,id:string,s:string,n:number)=>void}}).engine;engine.prepareReturn(d,stuck.id,stuck.stationId,now);});
+ assert.equal(repo.data.rentals.find(r=>r.id===stuck.id)!.state,'RETURNED');
+ assert.equal((await coordinator.return(repo,stuck.id,stuck.stationId,now,true)).state,'COMPLETED');
+ assert.equal(repo.data.payments.find(p=>p.rentalId===stuck.id)!.status,'CAPTURED');
+ assert.equal(stripe.log.length,0,'Stripe is never called for a simulated authorization');
+});

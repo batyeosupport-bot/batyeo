@@ -456,7 +456,8 @@ async function route(request:Request,path:string){
   const snapshot=await repository.read();
   const target=snapshot.rentals.find(r=>r.id===input.rentalId);
   if(!target)throw new DomainError('Location introuvable.',404);
-  if(!['ACTIVE','OVERDUE'].includes(target.state)||target.startedAt===null)throw new DomainError('Seule une location en cours peut être clôturée à la main.',409);
+  // RETURNED: battery already back but settlement never finished — closing it again only completes the payment.
+  if(!['ACTIVE','OVERDUE','RETURNED'].includes(target.state)||target.startedAt===null)throw new DomainError('Seule une location en cours peut être clôturée à la main.',409);
   if(!snapshot.stations.some(s=>s.id===input.stationId))throw new DomainError('Station de retour introuvable.',404);
   // The operator may back-date the return to when the customer really handed the battery back, so a
   // detection gap is never billed to the customer — but never before the rental began, nor in the future.
